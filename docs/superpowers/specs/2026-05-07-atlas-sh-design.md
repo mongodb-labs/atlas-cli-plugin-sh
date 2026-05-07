@@ -45,9 +45,41 @@ Behavior: exits with a user-friendly error if project_id is not resolvable.
 ```
 src/
   main.rs         — async main, orchestration logic
-  args.rs         — clap argument definitions
+  args.rs         — clap argument definitions (clap derive macro)
   credentials.rs  — keyring read/write/invalidate for CachedCredentials
   atlas_ops.rs    — #[operation]-annotated Atlas Admin API operations
+```
+
+### args.rs shape
+
+Clap derive macro, mirroring the existing plugin pattern:
+
+```rust
+#[derive(Parser)]
+pub struct Cli {
+    #[command(subcommand)]
+    command: PluginSubCommands,
+}
+
+#[derive(Subcommand)]
+pub enum PluginSubCommands {
+    Sh(ShArgs),
+}
+
+#[derive(Args)]
+pub struct ShArgs {
+    /// Name of the Atlas cluster to connect to
+    #[arg(long)]
+    pub cluster: String,
+
+    /// Override project ID from Atlas CLI config
+    #[arg(long)]
+    pub project_id: Option<String>,
+
+    /// Override org ID from Atlas CLI config
+    #[arg(long)]
+    pub org_id: Option<String>,
+}
 ```
 
 ---
