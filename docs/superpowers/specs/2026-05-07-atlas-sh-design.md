@@ -32,6 +32,7 @@ atlas sh --cluster <cluster-name>
 | Flag | Required | Description |
 |------|----------|-------------|
 | `--cluster` | Yes | Cluster name in the Atlas project |
+| `--profile` | No | Atlas CLI profile name (default: `"default"`) |
 | `--project-id` | No | Overrides `project_id` from Atlas CLI config |
 | `--org-id` | No | Overrides `org_id` from Atlas CLI config |
 
@@ -72,6 +73,10 @@ pub struct ShArgs {
     #[arg(long)]
     pub cluster: String,
 
+    /// Atlas CLI profile name
+    #[arg(long, default_value = "default")]
+    pub profile: String,
+
     /// Override project ID from Atlas CLI config
     #[arg(long)]
     pub project_id: Option<String>,
@@ -89,7 +94,7 @@ pub struct ShArgs {
 ```
 atlas sh --cluster prod-cluster [--project-id <id>] [--org-id <id>]
 
-1. Load AtlasCLIConfig via mongodb_atlas_cli::config::load_config(Some("default"))
+1. Load AtlasCLIConfig via mongodb_atlas_cli::config::load_config(Some(&args.profile))
 2. Override project_id / org_id from CLI flags if provided
 3. Resolve mongosh binary (FAIL FAST — before any API calls):
    a. config.mongosh_path if set → verify it exists
@@ -220,6 +225,5 @@ Run with `cargo test`.
 ## Out of Scope
 
 - Deleting users on early exit (Atlas `deleteAfterDate` handles cleanup)
-- `--profile` flag (always uses `"default"` profile)
 - Configurable TTL
 - Windows support
