@@ -91,12 +91,16 @@ atlas sh --cluster prod-cluster [--project-id <id>] [--org-id <id>]
 
 1. Load AtlasCLIConfig via mongodb_atlas_cli::config::load_config(Some("default"))
 2. Override project_id / org_id from CLI flags if provided
-3. Resolve project_id — error if not set in config or flags
-4. keyring.get("atlas-sh-{project_id}-{cluster}")
-   ├── found + expires_at > now → skip to step 6
-   └── missing or expired        → continue to step 5
+3. Resolve mongosh binary (FAIL FAST — before any API calls):
+   a. config.mongosh_path if set → verify it exists
+   b. else which::which("mongosh") → use result
+   c. else error: "mongosh not found. Install: https://www.mongodb.com/try/download/shell"
+4. Resolve project_id — error if not set in config or flags
+5. keyring.get("atlas-sh-{project_id}-{cluster}")
+   ├── found + expires_at > now → skip to step 7
+   └── missing or expired        → continue to step 6
 
-5. Create temporary database user:
+6. Create temporary database user:
    a. GET /groups/{project_id}/clusters/{cluster} → extract srv_address
    b. Generate: username = "atlas-sh-{uuid}", password = random 32-char alphanumeric
    c. POST /groups/{project_id}/databaseUsers:
@@ -109,12 +113,7 @@ atlas sh --cluster prod-cluster [--project-id <id>] [--org-id <id>]
         username, password, connection_string, expires_at: now + 8h
       })
 
-6. Resolve mongosh binary:
-   a. config.mongosh_path if set
-   b. else search PATH for "mongosh"
-   c. else error: "mongosh not found. Install: https://www.mongodb.com/try/download/shell"
-
-7. exec(mongosh, [connection_string, "--username", username, "--password", password])
+7. exec(mongosh_path, [connection_string, "--username", username, "--password", password])
    — replaces current process (no return)
 ```
 
@@ -179,6 +178,7 @@ serde_json = "1"
 chrono = { version = "0.4", features = ["serde"] }
 uuid = { version = "1", features = ["v4"] }
 rand = "0.8"
+which = "7"
 rustls = { version = "0.23", features = ["ring"] }
 ```
 
