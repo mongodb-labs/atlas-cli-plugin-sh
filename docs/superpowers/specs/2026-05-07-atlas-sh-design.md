@@ -45,11 +45,26 @@ Behavior: exits with a user-friendly error if project_id is not resolvable.
 
 ```
 src/
-  main.rs         — async main, orchestration logic
+  main.rs         — async main, tracing init, orchestration logic
   args.rs         — clap argument definitions (clap derive macro)
   credentials.rs  — keyring read/write/invalidate for CachedCredentials
   atlas_ops.rs    — #[operation]-annotated Atlas Admin API operations
 ```
+
+### Tracing
+
+`main` initializes `tracing_subscriber` with `EnvFilter` before any other work:
+
+```rust
+tracing_subscriber::fmt()
+    .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
+    .init();
+```
+
+Controlled via `RUST_LOG` env var (e.g. `RUST_LOG=atlas_cli_plugin_sh=debug atlas sh --cluster foo`).
+
+Use `tracing::debug!` / `tracing::info!` / `tracing::warn!` throughout. Never log a
+`Redacted<T>` field directly — the type enforces this at compile time via its `Debug` impl.
 
 ### args.rs shape
 
@@ -131,11 +146,15 @@ atlas sh --cluster prod-cluster [--project-id <id>] [--org-id <id>]
 ```rust
 struct CachedCredentials {
     username: String,
-    password: String,
-    connection_string: String,  // SRV string without credentials
+    password: Redacted<String>,          // redacted crate — never printed in logs/Debug
+    connection_string: Redacted<String>, // contains no credentials, but redact defensively
     expires_at: DateTime<Utc>,
 }
 ```
+
+`Redacted<T>` from the [`redacted`](https://docs.rs/redacted/latest/redacted/) crate wraps
+a value so that `Debug` and `Display` output `"[REDACTED]"`. Serialization uses the inner
+value normally (serde skips the wrapper), so keyring JSON round-trips are unaffected.
 
 Keyring service name: `"atlas-sh"`
 Keyring account key: `"{project_id}:{cluster_name}"`
@@ -184,6 +203,9 @@ chrono = { version = "0.4", features = ["serde"] }
 uuid = { version = "1", features = ["v4"] }
 rand = "0.8"
 which = "7"
+redacted = "0.1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 rustls = { version = "0.23", features = ["ring"] }
 ```
 
