@@ -145,8 +145,6 @@ fn launch_mongosh(
     password: &Redacted<String, RedactContents>,
     extra_args: &[String],
 ) -> Result<()> {
-    use std::os::unix::process::CommandExt;
-
     let mut cmd = std::process::Command::new(mongosh_path);
     cmd.arg(&**connection_string)
         .arg("--username")
@@ -160,6 +158,16 @@ fn launch_mongosh(
         cmd.arg(arg);
     }
 
-    let err = cmd.exec();
-    Err(anyhow!("Failed to exec mongosh: {err}"))
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        let err = cmd.exec();
+        return Err(anyhow!("Failed to exec mongosh: {err}"));
+    }
+
+    #[cfg(not(unix))]
+    {
+        let status = cmd.status().context("Failed to launch mongosh")?;
+        std::process::exit(status.code().unwrap_or(1));
+    }
 }
