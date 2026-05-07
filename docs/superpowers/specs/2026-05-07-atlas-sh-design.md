@@ -99,6 +99,10 @@ pub struct ShArgs {
     /// Override org ID from Atlas CLI config
     #[arg(long)]
     pub org_id: Option<String>,
+
+    /// Extra arguments forwarded verbatim to mongosh
+    #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+    pub mongosh_args: Vec<String>,
 }
 ```
 
@@ -133,7 +137,7 @@ atlas sh --cluster prod-cluster [--project-id <id>] [--org-id <id>]
         username, password, connection_string, expires_at: now + 8h
       })
 
-7. exec(mongosh_path, [connection_string, "--username", username, "--password", password])
+7. exec(mongosh_path, [connection_string, "--username", username, "--password", password, ...mongosh_args])
    — replaces current process (no return)
 ```
 
