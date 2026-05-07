@@ -27,10 +27,6 @@ pub struct ShArgs {
     #[arg(long)]
     pub project_id: Option<String>,
 
-    /// Override org ID from Atlas CLI config
-    #[arg(long)]
-    pub org_id: Option<String>,
-
     /// Extra arguments forwarded verbatim to mongosh
     #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
     pub mongosh_args: Vec<String>,
@@ -48,7 +44,6 @@ mod tests {
         assert_eq!(args.cluster, "my-cluster");
         assert_eq!(args.profile, "default");
         assert!(args.project_id.is_none());
-        assert!(args.org_id.is_none());
         assert!(args.mongosh_args.is_empty());
     }
 
@@ -65,7 +60,6 @@ mod tests {
             "--cluster", "prod",
             "--profile", "staging",
             "--project-id", "abc123",
-            "--org-id", "org456",
             "--eval", "db.stats()",
         ])
         .unwrap();
@@ -73,7 +67,6 @@ mod tests {
         assert_eq!(args.cluster, "prod");
         assert_eq!(args.profile, "staging");
         assert_eq!(args.project_id.as_deref(), Some("abc123"));
-        assert_eq!(args.org_id.as_deref(), Some("org456"));
         assert_eq!(args.mongosh_args, vec!["--eval", "db.stats()"]);
     }
 }

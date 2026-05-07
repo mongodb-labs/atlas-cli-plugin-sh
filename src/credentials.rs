@@ -166,6 +166,8 @@ pub fn store(account: &str, creds: &CachedCredentials) -> Result<()> {
 }
 
 /// Delete cached credentials from the OS keychain (best-effort).
+/// Available for future cleanup tooling (e.g. `atlas sh logout`).
+#[allow(dead_code)]
 pub fn invalidate(account: &str) -> Result<()> {
     let entry = Entry::new(KEYRING_SERVICE, account)
         .context("failed to open keyring entry")?;

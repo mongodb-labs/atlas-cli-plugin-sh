@@ -48,9 +48,7 @@ pub struct DatabaseUserRole {
 }
 
 #[derive(Debug, Deserialize)]
-pub struct DatabaseUserResponse {
-    pub username: String,
-}
+pub struct DatabaseUserResponse {}
 
 // --- Public helpers ---
 

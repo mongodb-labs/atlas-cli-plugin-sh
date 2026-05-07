@@ -9,6 +9,7 @@ mod atlas_ops;
 mod credentials;
 
 use args::{Cli, PluginSubCommands};
+use redacted::{Redacted, RedactContents};
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -23,7 +24,11 @@ async fn main() -> Result<()> {
     let client = mongodb_atlas_cli::atlas::client::AtlasClient::with_profile(&args.profile)
         .context("Failed to create Atlas client. Run 'atlas auth login' and try again.")?;
 
-    // 2. Resolve project_id (flag overrides config)
+    // 2. Fail fast: find mongosh before any API calls
+    let mongosh_path = resolve_mongosh(client.config())?;
+    tracing::debug!(path = %mongosh_path.display(), "found mongosh");
+
+    // 3. Resolve project_id (flag overrides config)
     let project_id = args
         .project_id
         .clone()
@@ -40,10 +45,6 @@ async fn main() -> Result<()> {
         cluster = %args.cluster,
         "resolved config"
     );
-
-    // 3. Fail fast: find mongosh before any API calls
-    let mongosh_path = resolve_mongosh(client.config())?;
-    tracing::debug!(path = %mongosh_path.display(), "found mongosh");
 
     // 4. Check keyring cache
     let keyring_account = format!("{}:{}", project_id, args.cluster);
@@ -139,9 +140,9 @@ async fn create_user_uncached(
 
 fn launch_mongosh(
     mongosh_path: &std::path::Path,
-    connection_string: &redacted::Redacted<String, redacted::RedactContents>,
+    connection_string: &Redacted<String, RedactContents>,
     username: &str,
-    password: &redacted::Redacted<String, redacted::RedactContents>,
+    password: &Redacted<String, RedactContents>,
     extra_args: &[String],
 ) -> Result<()> {
     use std::os::unix::process::CommandExt;
