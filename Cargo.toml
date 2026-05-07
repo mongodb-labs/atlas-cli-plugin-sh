@@ -30,3 +30,7 @@ inherits = "release"
 lto = "thin"
 
 [dist]
+
+[dist.dependencies.apt]
+libdbus-1-dev = "*"
+pkg-config = "*"
