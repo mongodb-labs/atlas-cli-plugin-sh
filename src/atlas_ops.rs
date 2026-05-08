@@ -1,30 +1,49 @@
+use anyhow::{anyhow, Error, Result};
+use http::StatusCode;
+use mongodb_atlas_cli::atlas::client::AtlasClient;
+use mongodb_atlas_cli::atlas::layer::OperationError;
 use mongodb_atlas_cli::atlas::operation;
 use serde::{Deserialize, Serialize};
 
+use crate::domain::{ClusterName, Password, ProjectId, Username};
+
+/// Database the temporary user authenticates against.
+const AUTH_DATABASE: &str = "admin";
+
+/// Roles granted to the temporary user.
+const TEMP_USER_ROLES: &[(&str, &str)] = &[("readWriteAnyDatabase", AUTH_DATABASE)];
+
 // --- GetCluster ---
 
-/// GET /api/atlas/v2/groups/{group_id}/clusters/{cluster_name}
+/// `GET /api/atlas/v2/groups/{group_id}/clusters/{cluster_name}`
 #[derive(Debug)]
 #[operation(method = GET, version = "2024-08-05")]
 #[url("/api/atlas/v2/groups/{group_id}/clusters/{cluster_name}")]
 #[response(ClusterDetail)]
 struct GetClusterRequest {}
 
+// Must be `pub` (not `pub(crate)`): the `#[operation]` macro generates a public
+// alias referencing this type, so restricting visibility triggers E0446.
+#[allow(unreachable_pub)]
 #[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ClusterDetail {
-    #[serde(rename = "connectionStrings")]
-    pub connection_strings: ConnectionStrings,
+    pub(crate) connection_strings: ConnectionStrings,
 }
 
 #[derive(Debug, Deserialize)]
-pub struct ConnectionStrings {
-    #[serde(rename = "standardSrv")]
-    pub standard_srv: String,
+#[serde(rename_all = "camelCase")]
+pub(crate) struct ConnectionStrings {
+    pub(crate) standard_srv: String,
 }
 
 // --- CreateDatabaseUser ---
 
-/// POST /api/atlas/v2/groups/{group_id}/databaseUsers
+/// `POST /api/atlas/v2/groups/{group_id}/databaseUsers`
+//
+// Per-field `#[serde(rename = "…")]` is required: the `#[operation]` macro
+// generates the `Serialize` derive itself, so a struct-level
+// `#[serde(rename_all)]` is not visible at expansion time.
 #[derive(Debug)]
 #[operation(method = POST, version = "2024-08-05")]
 #[url("/api/atlas/v2/groups/{group_id}/databaseUsers")]
@@ -40,87 +59,116 @@ struct CreateDatabaseUserRequest {
 }
 
 #[derive(Debug, Serialize)]
-pub struct DatabaseUserRole {
-    #[serde(rename = "roleName")]
-    pub role_name: String,
-    #[serde(rename = "databaseName")]
-    pub database_name: String,
+#[serde(rename_all = "camelCase")]
+pub(crate) struct DatabaseUserRole {
+    pub(crate) role_name: String,
+    pub(crate) database_name: String,
 }
 
+// See note on `ClusterDetail`: must be `pub` for the `#[operation]` macro.
+#[allow(unreachable_pub)]
 #[derive(Debug, Deserialize)]
 pub struct DatabaseUserResponse {}
 
 // --- Public helpers ---
 
-/// Fetch the SRV connection string for a cluster.
-pub async fn get_cluster_srv(
-    client: &mongodb_atlas_cli::atlas::client::AtlasClient,
-    group_id: &str,
-    cluster_name: &str,
-) -> anyhow::Result<String> {
-    use http::StatusCode;
-    use mongodb_atlas_cli::atlas::layer::OperationError;
+/// Context passed to [`map_atlas_error`] so the user-facing message can name
+/// the affected resource.
+struct AtlasErrorContext<'a> {
+    /// Verb describing the failed action — used as the fallback prefix.
+    /// Example: `"create database user"`.
+    action: &'a str,
+    /// Pre-formatted message returned when the API responds with `NOT_FOUND`.
+    /// `None` falls back to a generic message built from `action`.
+    not_found: Option<String>,
+}
 
+fn map_atlas_error(err: OperationError, ctx: AtlasErrorContext<'_>) -> anyhow::Error {
+    match err {
+        OperationError::Atlas { status, .. } if status == StatusCode::UNAUTHORIZED => {
+            anyhow!("Authentication failed. Run 'atlas auth login' and try again.")
+        }
+        OperationError::Atlas { status, .. } if status == StatusCode::NOT_FOUND => {
+            ctx.not_found.map_or_else(
+                || anyhow!("Failed to {}: not found.", ctx.action),
+                Error::msg,
+            )
+        }
+        other => anyhow!("Failed to {}: {other}", ctx.action),
+    }
+}
+
+/// Fetch the SRV connection string for a cluster.
+pub(crate) async fn get_cluster_srv(
+    client: &AtlasClient,
+    project_id: &ProjectId,
+    cluster: &ClusterName,
+) -> Result<String> {
     let op = GetClusterOperation::builder()
         .url_parameters(
             GetClusterOperationUrlParams::builder()
-                .group_id(group_id.to_string())
-                .cluster_name(cluster_name.to_string())
+                .group_id(project_id.as_str().to_owned())
+                .cluster_name(cluster.as_str().to_owned())
                 .build(),
         )
         .build();
 
-    let detail: ClusterDetail = client.execute(op).await.map_err(|e| match e {
-        OperationError::Atlas { status, .. } if status == StatusCode::UNAUTHORIZED => {
-            anyhow::anyhow!("Authentication failed. Run 'atlas auth login' and try again.")
-        }
-        OperationError::Atlas { status, .. } if status == StatusCode::NOT_FOUND => {
-            anyhow::anyhow!(
-                "Cluster '{}' not found in project '{}'.",
-                cluster_name,
-                group_id
-            )
-        }
-        e => anyhow::anyhow!("Atlas API error: {e}"),
+    let detail: ClusterDetail = client.execute(op).await.map_err(|e| {
+        map_atlas_error(
+            e,
+            AtlasErrorContext {
+                action: "fetch cluster",
+                not_found: Some(format!(
+                    "Cluster '{cluster}' not found in project '{project_id}'."
+                )),
+            },
+        )
     })?;
 
     Ok(detail.connection_strings.standard_srv)
 }
 
-/// Create a temporary database user with readWriteAnyDatabase and 8h TTL.
-pub async fn create_temp_db_user(
-    client: &mongodb_atlas_cli::atlas::client::AtlasClient,
-    group_id: &str,
-    username: &str,
-    password: &str,
+/// Create a temporary database user with `readWriteAnyDatabase` and a
+/// caller-provided expiry. Atlas removes the user automatically at
+/// `delete_after_date`.
+pub(crate) async fn create_temp_db_user(
+    client: &AtlasClient,
+    project_id: &ProjectId,
+    username: &Username,
+    password: &Password,
     delete_after_date: &str,
-) -> anyhow::Result<()> {
-    use http::StatusCode;
-    use mongodb_atlas_cli::atlas::layer::OperationError;
+) -> Result<()> {
+    let roles = TEMP_USER_ROLES
+        .iter()
+        .map(|(role, db)| DatabaseUserRole {
+            role_name: (*role).to_string(),
+            database_name: (*db).to_string(),
+        })
+        .collect();
 
     let op = CreateDatabaseUserOperation::builder()
         .url_parameters(
             CreateDatabaseUserOperationUrlParams::builder()
-                .group_id(group_id.to_string())
+                .group_id(project_id.as_str().to_owned())
                 .build(),
         )
         .body(CreateDatabaseUserRequest {
-            database_name: "admin".to_string(),
-            username: username.to_string(),
-            password: password.to_string(),
-            roles: vec![DatabaseUserRole {
-                role_name: "readWriteAnyDatabase".to_string(),
-                database_name: "admin".to_string(),
-            }],
+            database_name: AUTH_DATABASE.to_string(),
+            username: username.as_str().to_owned(),
+            password: password.as_str().to_owned(),
+            roles,
             delete_after_date: delete_after_date.to_string(),
         })
         .build();
 
-    let _: DatabaseUserResponse = client.execute(op).await.map_err(|e| match e {
-        OperationError::Atlas { status, .. } if status == StatusCode::UNAUTHORIZED => {
-            anyhow::anyhow!("Authentication failed. Run 'atlas auth login' and try again.")
-        }
-        e => anyhow::anyhow!("Failed to create database user: {e}"),
+    let _: DatabaseUserResponse = client.execute(op).await.map_err(|e| {
+        map_atlas_error(
+            e,
+            AtlasErrorContext {
+                action: "create database user",
+                not_found: None,
+            },
+        )
     })?;
 
     Ok(())
@@ -129,7 +177,6 @@ pub async fn create_temp_db_user(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use serde_json;
 
     #[test]
     fn cluster_detail_deserializes() {
@@ -147,7 +194,7 @@ mod tests {
     }
 
     #[test]
-    fn create_user_request_serializes() {
+    fn create_user_request_serializes_with_camel_case() {
         let req = CreateDatabaseUserRequest {
             database_name: "admin".to_string(),
             username: "atlas-sh-test".to_string(),
@@ -162,5 +209,14 @@ mod tests {
         assert!(json.contains("readWriteAnyDatabase"));
         assert!(json.contains("deleteAfterDate"));
         assert!(json.contains("databaseName"));
+        assert!(json.contains("roleName"));
+    }
+
+    #[test]
+    fn temp_user_roles_constant_is_well_formed() {
+        for (role, db) in TEMP_USER_ROLES {
+            assert!(!role.is_empty());
+            assert!(!db.is_empty());
+        }
     }
 }
