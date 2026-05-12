@@ -46,5 +46,5 @@ jobs:
           gh pr create \
             --title "chore: bump version to v${{ inputs.version }}" \
             --body "Automated version bump to v${{ inputs.version }}. Merging this PR will trigger the release workflow." \
-            --base master \
+            --base main \
             --head release/v${{ inputs.version }}
