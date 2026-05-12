@@ -15,12 +15,17 @@ permissions:
 jobs:
   prepare-release:
     runs-on: ubuntu-22.04
-    env:
-      GH_TOKEN: ${{ secrets.RELEASE_PAT }}
     steps:
+      - name: set Apix Bot token
+        id: app-token
+        uses: mongodb/apix-action/token@8549161120ce38b1e132ff833302a0ecbde58038
+        with:
+          app-id: ${{ secrets.APIXBOT_APP_ID }}
+          private-key: ${{ secrets.APIXBOT_APP_PEM }}
+
       - uses: actions/checkout@v4
         with:
-          token: ${{ secrets.RELEASE_PAT }}
+          token: ${{ steps.app-token.outputs.token }}
 
       - uses: dtolnay/rust-toolchain@stable
 
@@ -34,14 +39,16 @@ jobs:
 
       - name: Commit and push
         run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git config user.name "${{ steps.app-token.outputs.user-name }}"
+          git config user.email "${{ steps.app-token.outputs.user-email }}"
           git checkout -b release/v${{ inputs.version }}
           git add Cargo.toml Cargo.lock
           git commit -m "chore: bump version to v${{ inputs.version }}"
           git push origin release/v${{ inputs.version }}
 
       - name: Open pull request
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
         run: |
           gh pr create \
             --title "chore: bump version to v${{ inputs.version }}" \
