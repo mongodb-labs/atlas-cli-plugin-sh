@@ -7,8 +7,8 @@ use chrono::Duration;
 use clap::Parser;
 use mongodb_atlas_cli::atlas::client::AtlasClient;
 use mongodb_atlas_cli::config::AtlasCLIConfig;
-use rand::distributions::Alphanumeric;
-use rand::Rng;
+use rand::distr::Alphanumeric;
+use rand::RngExt;
 use uuid::Uuid;
 
 mod args;
@@ -201,7 +201,7 @@ where
 const GENERATED_PASSWORD_LEN: usize = 32;
 
 fn generate_password() -> Password {
-    let raw: String = rand::thread_rng()
+    let raw: String = rand::rng()
         .sample_iter(&Alphanumeric)
         .take(GENERATED_PASSWORD_LEN)
         .map(char::from)
