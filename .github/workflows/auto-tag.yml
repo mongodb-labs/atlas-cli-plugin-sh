@@ -29,6 +29,9 @@ jobs:
           python-version: '3.11'
 
       - name: Compare versions and tag if changed
+        env:
+          USER_NAME: ${{ steps.app-token.outputs.user-name }}
+          USER_EMAIL: ${{ steps.app-token.outputs.user-email }}
         run: |
           CURR_VERSION=$(python3 -c "import tomllib; print(tomllib.load(open('Cargo.toml','rb'))['package']['version'])")
           PREV_VERSION=$(git show HEAD~1:Cargo.toml | python3 -c "import sys,tomllib; print(tomllib.load(sys.stdin.buffer)['package']['version'])")
@@ -48,8 +51,8 @@ jobs:
             exit 0
           fi
 
-          git config user.name "${{ steps.app-token.outputs.user-name }}"
-          git config user.email "${{ steps.app-token.outputs.user-email }}"
+          git config user.name "$USER_NAME"
+          git config user.email "$USER_EMAIL"
           git tag "$TAG"
           git push origin "$TAG"
           echo "Tagged and pushed $TAG"

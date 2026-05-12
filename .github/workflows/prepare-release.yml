@@ -35,23 +35,30 @@ jobs:
         run: cargo binstall -y cargo-edit
 
       - name: Bump version
-        run: cargo set-version ${{ inputs.version }}
+        env:
+          VERSION: ${{ inputs.version }}
+        run: cargo set-version "$VERSION"
 
       - name: Commit and push
+        env:
+          USER_NAME: ${{ steps.app-token.outputs.user-name }}
+          USER_EMAIL: ${{ steps.app-token.outputs.user-email }}
+          VERSION: ${{ inputs.version }}
         run: |
-          git config user.name "${{ steps.app-token.outputs.user-name }}"
-          git config user.email "${{ steps.app-token.outputs.user-email }}"
-          git checkout -b release/v${{ inputs.version }}
+          git config user.name "$USER_NAME"
+          git config user.email "$USER_EMAIL"
+          git checkout -b "release/v$VERSION"
           git add Cargo.toml Cargo.lock
-          git commit -m "chore: bump version to v${{ inputs.version }}"
-          git push origin release/v${{ inputs.version }}
+          git commit -m "chore: bump version to v$VERSION"
+          git push origin "release/v$VERSION"
 
       - name: Open pull request
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          VERSION: ${{ inputs.version }}
         run: |
           gh pr create \
-            --title "chore: bump version to v${{ inputs.version }}" \
-            --body "Automated version bump to v${{ inputs.version }}. Merging this PR will trigger the release workflow." \
+            --title "chore: bump version to v$VERSION" \
+            --body "Automated version bump to v$VERSION. Merging this PR will trigger the release workflow." \
             --base main \
-            --head release/v${{ inputs.version }}
+            --head "release/v$VERSION"
