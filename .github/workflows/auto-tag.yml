@@ -12,16 +12,26 @@ jobs:
   auto-tag:
     runs-on: ubuntu-22.04
     steps:
+      - name: set Apix Bot token
+        id: app-token
+        uses: mongodb/apix-action/token@8549161120ce38b1e132ff833302a0ecbde58038
+        with:
+          app-id: ${{ secrets.APIXBOT_APP_ID }}
+          private-key: ${{ secrets.APIXBOT_APP_PEM }}
+
       - uses: actions/checkout@v4
         with:
           fetch-depth: 2
-          token: ${{ secrets.RELEASE_PAT }}
+          token: ${{ steps.app-token.outputs.token }}
 
       - uses: actions/setup-python@v6
         with:
           python-version: '3.11'
 
       - name: Compare versions and tag if changed
+        env:
+          USER_NAME: ${{ steps.app-token.outputs.user-name }}
+          USER_EMAIL: ${{ steps.app-token.outputs.user-email }}
         run: |
           CURR_VERSION=$(python3 -c "import tomllib; print(tomllib.load(open('Cargo.toml','rb'))['package']['version'])")
           PREV_VERSION=$(git show HEAD~1:Cargo.toml | python3 -c "import sys,tomllib; print(tomllib.load(sys.stdin.buffer)['package']['version'])")
@@ -41,8 +51,8 @@ jobs:
             exit 0
           fi
 
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git config user.name "$USER_NAME"
+          git config user.email "$USER_EMAIL"
           git tag "$TAG"
           git push origin "$TAG"
           echo "Tagged and pushed $TAG"
