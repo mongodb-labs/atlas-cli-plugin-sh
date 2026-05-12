@@ -11,3 +11,7 @@ updates:
     schedule:
       interval: "weekly"
     open-pull-requests-limit: 10
+    ignore:
+      # release.yml is managed by cargo-dist which pins these versions
+      - dependency-name: "actions/upload-artifact"
+      - dependency-name: "actions/download-artifact"
