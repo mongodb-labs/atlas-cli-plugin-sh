@@ -7,7 +7,7 @@ Atlas CLI plugin that launches [mongosh](https://www.mongodb.com/docs/mongodb-sh
 ## Install
 
 ```
-atlas plugin install mongodb-labs/atlas-cli-plugin-sh@v1.0.0-rc3
+atlas plugin install mongodb-labs/atlas-cli-plugin-sh@v1.0.0-rc4
 ```
 
 ## Usage
