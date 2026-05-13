@@ -1,8 +1,7 @@
-use std::convert::Infallible;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use anyhow::{anyhow, Context, Result};
+use anyhow::Result;
 use chrono::Duration;
 use clap::Parser;
 use mongodb_atlas_cli::atlas::client::AtlasClient;
@@ -72,10 +71,43 @@ async fn run_sh(args: ShArgs) -> Result<()> {
     );
 
     let atlas = AtlasApiClient::new(&client);
-    let (credentials, _from_cache) =
+    let (credentials, from_cache) =
         obtain_credentials(&SystemClock, &KeyringStore, &atlas, &project_id, &cluster).await?;
 
-    launch_mongosh(&mongosh_path, &credentials, &args.mongosh_args).map(|_: Infallible| ())
+    let account = KeyringAccount::new(&project_id, &cluster);
+    let exit_code = launch_mongosh(&mongosh_path, &credentials, &args.mongosh_args)?;
+
+    if exit_code != 0 {
+        if from_cache {
+            eprintln!(
+                "{}: Cached credentials may be invalid \u{2014} retrying with a fresh user.",
+                console::style("warning").yellow().bold()
+            );
+            if let Err(e) = KeyringStore.invalidate(&account) {
+                tracing::warn!(%e, "failed to invalidate cached credentials before retry");
+            }
+            let (fresh_creds, _) =
+                obtain_credentials(&SystemClock, &KeyringStore, &atlas, &project_id, &cluster)
+                    .await?;
+            let exit_code2 =
+                launch_mongosh(&mongosh_path, &fresh_creds, &args.mongosh_args)?;
+            if exit_code2 != 0 {
+                return Err(UserError::MongoshFailed {
+                    exit_code: Some(exit_code2),
+                    cluster: cluster.to_string(),
+                }
+                .into());
+            }
+        } else {
+            return Err(UserError::MongoshFailed {
+                exit_code: Some(exit_code),
+                cluster: cluster.to_string(),
+            }
+            .into());
+        }
+    }
+
+    Ok(())
 }
 
 // --- Orchestration (testable) ---------------------------------------------
@@ -261,27 +293,15 @@ fn build_mongosh_command(
     cmd
 }
 
-#[cfg(unix)]
 fn launch_mongosh(
     mongosh_path: &Path,
     creds: &CachedCredentials,
     extra_args: &[String],
-) -> Result<Infallible> {
-    use std::os::unix::process::CommandExt;
-    let err = build_mongosh_command(mongosh_path, creds, extra_args).exec();
-    Err(anyhow!("Failed to exec mongosh: {err}"))
-}
-
-#[cfg(not(unix))]
-fn launch_mongosh(
-    mongosh_path: &Path,
-    creds: &CachedCredentials,
-    extra_args: &[String],
-) -> Result<Infallible> {
+) -> Result<i32> {
     let status = build_mongosh_command(mongosh_path, creds, extra_args)
         .status()
-        .context("Failed to launch mongosh")?;
-    std::process::exit(status.code().unwrap_or(1));
+        .map_err(|e| anyhow::anyhow!("Failed to launch mongosh: {e}"))?;
+    Ok(status.code().unwrap_or(1))
 }
 
 #[cfg(test)]
