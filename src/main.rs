@@ -16,8 +16,10 @@ mod atlas_ops;
 mod credentials;
 mod deps;
 mod domain;
+mod error;
 
 use args::{Cli, ConnectionArgs, PluginSubCommands, ShArgs};
+use error::UserError;
 use credentials::CachedCredentials;
 use deps::{AtlasApi, AtlasApiClient, Clock, CredentialStore, KeyringStore, SystemClock};
 use domain::{ClusterName, ConnectionString, KeyringAccount, Password, ProjectId, Username};
