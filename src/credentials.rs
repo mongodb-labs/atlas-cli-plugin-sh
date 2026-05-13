@@ -51,14 +51,12 @@ fn parse_cached_json(json: &str) -> Result<CachedCredentials, serde_json::Error>
 /// Load cached credentials from the OS keychain.
 ///
 /// - `Ok(Some(creds))` when an entry exists and parses cleanly.
-/// - `Ok(None)` when no entry exists for `account` — not an error.
-/// - `Err(_)` when the keyring is unavailable or the cached JSON is corrupt.
+/// - `Ok(None)` when no entry exists for `account`, or when the cached JSON is
+///   corrupt (prints a warning and treats as a miss — not an error).
+/// - `Err(_)` when the keyring is unavailable (DBus down, permission denied, …).
 ///
-/// All keyring failures (`DBus` down, permission denied, locked keychain, …)
-/// collapse into `anyhow::Error`. This is intentional: the only consumer is
+/// All keyring failures collapse into `anyhow::Error`. The only consumer is
 /// `main`, which degrades gracefully on any error by re-provisioning a user.
-/// If a future caller needs to differentiate causes, this function should be
-/// converted to a typed error via `thiserror`.
 pub(crate) fn load(account: &KeyringAccount) -> Result<Option<CachedCredentials>> {
     let entry =
         Entry::new(KEYRING_SERVICE, account.as_str()).context("failed to open keyring entry")?;
