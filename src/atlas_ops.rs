@@ -1,4 +1,4 @@
-use anyhow::{anyhow, Error, Result};
+use anyhow::Result;
 use http::StatusCode;
 use mongodb_atlas_cli::atlas::client::AtlasClient;
 use mongodb_atlas_cli::atlas::layer::OperationError;
@@ -6,6 +6,7 @@ use mongodb_atlas_cli::atlas::operation;
 use serde::{Deserialize, Serialize};
 
 use crate::domain::{ClusterName, Password, ProjectId, Username};
+use crate::error::UserError;
 
 /// Database the temporary user authenticates against.
 const AUTH_DATABASE: &str = "admin";
@@ -74,27 +75,48 @@ pub struct DatabaseUserResponse {}
 
 /// Context passed to [`map_atlas_error`] so the user-facing message can name
 /// the affected resource.
-struct AtlasErrorContext<'a> {
+struct AtlasErrorContext {
     /// Verb describing the failed action — used as the fallback prefix.
     /// Example: `"create database user"`.
-    action: &'a str,
-    /// Pre-formatted message returned when the API responds with `NOT_FOUND`.
-    /// `None` falls back to a generic message built from `action`.
-    not_found: Option<String>,
+    action: &'static str,
+    /// Typed error returned when the API responds with `NOT_FOUND`.
+    /// `None` falls back to a generic `AtlasApiError` built from `action`.
+    not_found: Option<UserError>,
 }
 
-fn map_atlas_error(err: OperationError, ctx: AtlasErrorContext<'_>) -> anyhow::Error {
+fn map_atlas_error(err: &OperationError, ctx: AtlasErrorContext) -> anyhow::Error {
+    // Match on `err` (already a reference) so we can call `err.to_string()`
+    // lazily in the arms that actually need the detail string, avoiding an
+    // allocation on the UNAUTHORIZED fast path.
     match err {
-        OperationError::Atlas { status, .. } if status == StatusCode::UNAUTHORIZED => {
-            anyhow!("Authentication failed. Run 'atlas auth login' and try again.")
+        OperationError::Atlas { status, .. } if *status == StatusCode::UNAUTHORIZED => {
+            UserError::NotAuthenticated.into()
         }
-        OperationError::Atlas { status, .. } if status == StatusCode::NOT_FOUND => {
+        OperationError::Atlas { status, .. } if *status == StatusCode::NOT_FOUND => {
             ctx.not_found.map_or_else(
-                || anyhow!("Failed to {}: not found.", ctx.action),
-                Error::msg,
+                || {
+                    UserError::AtlasApiError {
+                        action: ctx.action,
+                        status: StatusCode::NOT_FOUND.as_u16(),
+                        detail: "resource not found".into(),
+                    }
+                    .into()
+                },
+                Into::into,
             )
         }
-        other => anyhow!("Failed to {}: {other}", ctx.action),
+        OperationError::Atlas { status, .. } => UserError::AtlasApiError {
+            action: ctx.action,
+            status: status.as_u16(),
+            detail: err.to_string(),
+        }
+        .into(),
+        _ => UserError::AtlasApiError {
+            action: ctx.action,
+            status: 0,
+            detail: err.to_string(),
+        }
+        .into(),
     }
 }
 
@@ -115,12 +137,13 @@ pub(crate) async fn get_cluster_srv(
 
     let detail: ClusterDetail = client.execute(op).await.map_err(|e| {
         map_atlas_error(
-            e,
+            &e,
             AtlasErrorContext {
                 action: "fetch cluster",
-                not_found: Some(format!(
-                    "Cluster '{cluster}' not found in project '{project_id}'."
-                )),
+                not_found: Some(UserError::ClusterNotFound {
+                    cluster: cluster.to_string(),
+                    project_id: project_id.to_string(),
+                }),
             },
         )
     })?;
@@ -163,10 +186,12 @@ pub(crate) async fn create_temp_db_user(
 
     let _: DatabaseUserResponse = client.execute(op).await.map_err(|e| {
         map_atlas_error(
-            e,
+            &e,
             AtlasErrorContext {
                 action: "create database user",
-                not_found: None,
+                not_found: Some(UserError::ProjectNotFound {
+                    project_id: project_id.to_string(),
+                }),
             },
         )
     })?;
