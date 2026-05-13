@@ -72,7 +72,7 @@ async fn run_sh(args: ShArgs) -> Result<()> {
     );
 
     let atlas = AtlasApiClient::new(&client);
-    let (credentials, from_cache) =
+    let (credentials, _from_cache) =
         obtain_credentials(&SystemClock, &KeyringStore, &atlas, &project_id, &cluster).await?;
 
     launch_mongosh(&mongosh_path, &credentials, &args.mongosh_args).map(|_: Infallible| ())
