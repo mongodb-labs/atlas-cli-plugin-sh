@@ -59,7 +59,7 @@ impl fmt::Display for UserError {
             }
             Self::MongoshFailed { exit_code, cluster } => {
                 let code = exit_code
-                    .map_or_else(|| "unknown".to_string(), |c| c.to_string());
+                    .map_or_else(|| "unknown".to_owned(), |c| c.to_string());
                 writeln!(f, "{error}: mongosh exited with code {code}")?;
                 write!(
                     f,
@@ -127,6 +127,7 @@ mod tests {
         let msg = err.to_string();
         assert!(msg.contains("fetch cluster"), "got: {msg}");
         assert!(msg.contains("500"), "got: {msg}");
+        assert!(msg.contains("Internal Server Error"), "got: {msg}");
     }
 
     #[test]
@@ -136,8 +137,19 @@ mod tests {
             cluster: "MyCluster".into(),
         };
         let msg = err.to_string();
-        assert!(msg.contains("1"), "got: {msg}");
+        assert!(msg.contains("code 1"), "got: {msg}");
+        assert!(msg.contains("MyCluster"), "got: {msg}");
         assert!(msg.contains("--clear-cache"), "got: {msg}");
+    }
+
+    #[test]
+    fn mongosh_failed_with_unknown_exit_code() {
+        let err = UserError::MongoshFailed {
+            exit_code: None,
+            cluster: "MyCluster".into(),
+        };
+        let msg = err.to_string();
+        assert!(msg.contains("unknown"), "got: {msg}");
     }
 
     #[test]
