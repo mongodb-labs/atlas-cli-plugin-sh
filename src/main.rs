@@ -22,6 +22,7 @@ use args::{Cli, ConnectionArgs, PluginSubCommands, ShArgs};
 use credentials::CachedCredentials;
 use deps::{AtlasApi, AtlasApiClient, Clock, CredentialStore, KeyringStore, SystemClock};
 use domain::{ClusterName, ConnectionString, KeyringAccount, Password, ProjectId, Username};
+use error::UserError;
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> Result<()> {
@@ -209,8 +210,10 @@ fn generate_password() -> Password {
 // --- Process-level helpers ------------------------------------------------
 
 fn build_client(profile: &str) -> Result<AtlasClient> {
-    AtlasClient::with_profile(profile)
-        .context("Failed to create Atlas client. Run 'atlas auth login' and try again.")
+    AtlasClient::with_profile(profile).map_err(|e| {
+        tracing::debug!(%e, "failed to create Atlas client");
+        UserError::NotAuthenticated.into()
+    })
 }
 
 fn resolve_project_id(args: &ConnectionArgs, config: &AtlasCLIConfig) -> Result<ProjectId> {
@@ -218,12 +221,7 @@ fn resolve_project_id(args: &ConnectionArgs, config: &AtlasCLIConfig) -> Result<
         .as_deref()
         .or(config.project_id.as_deref())
         .map(ProjectId::from)
-        .ok_or_else(|| {
-            anyhow!(
-                "No project ID configured. Use --project-id or run \
-                 'atlas config set project_id <id>'"
-            )
-        })
+        .ok_or_else(|| UserError::ProjectNotConfigured.into())
 }
 
 fn resolve_mongosh(config: &AtlasCLIConfig) -> Result<PathBuf> {
@@ -237,8 +235,10 @@ fn resolve_mongosh(config: &AtlasCLIConfig) -> Result<PathBuf> {
             "mongosh_path from config does not exist, falling back to PATH",
         );
     }
-    which::which("mongosh")
-        .with_context(|| "mongosh not found. Install: https://www.mongodb.com/try/download/shell")
+    which::which("mongosh").map_err(|e| {
+        tracing::debug!(%e, "mongosh not found on PATH");
+        UserError::MongoshNotFound.into()
+    })
 }
 
 fn build_mongosh_command(
