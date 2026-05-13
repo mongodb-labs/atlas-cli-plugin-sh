@@ -30,7 +30,6 @@ Examples:
   # Clear cached credentials for a cluster
   atlas sh --cluster MyCluster --clear-cache";
 
-
 #[derive(Debug, Parser)]
 #[command(
     version,
