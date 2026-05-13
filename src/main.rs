@@ -72,7 +72,7 @@ async fn run_sh(args: ShArgs) -> Result<()> {
     );
 
     let atlas = AtlasApiClient::new(&client);
-    let credentials =
+    let (credentials, from_cache) =
         obtain_credentials(&SystemClock, &KeyringStore, &atlas, &project_id, &cluster).await?;
 
     launch_mongosh(&mongosh_path, &credentials, &args.mongosh_args).map(|_: Infallible| ())
@@ -86,13 +86,16 @@ async fn run_sh(args: ShArgs) -> Result<()> {
 /// provisioning a fresh temporary user via the Atlas API. Falls back to an
 /// uncached creation when the keyring is unavailable so the user is never
 /// blocked by a broken credential store.
+///
+/// The returned bool is `true` when credentials came from cache (unexpired),
+/// `false` when freshly provisioned.
 async fn obtain_credentials<C, S, A>(
     clock: &C,
     store: &S,
     atlas: &A,
     project_id: &ProjectId,
     cluster: &ClusterName,
-) -> Result<CachedCredentials>
+) -> Result<(CachedCredentials, bool)>
 where
     C: Clock,
     S: CredentialStore,
@@ -106,7 +109,7 @@ where
                 expires_at = %creds.expires_at,
                 "using cached credentials",
             );
-            Ok(creds)
+            Ok((creds, true))
         }
         Ok(cached) => {
             if cached.is_some() {
@@ -114,11 +117,13 @@ where
             } else {
                 tracing::info!("no cached credentials, creating new user");
             }
-            create_and_cache(clock, store, atlas, project_id, cluster, &account).await
+            let creds = create_and_cache(clock, store, atlas, project_id, cluster, &account).await?;
+            Ok((creds, false))
         }
         Err(err) => {
             tracing::warn!(%err, "keyring unavailable, creating new user without caching");
-            create_user(clock, atlas, project_id, cluster).await
+            let creds = create_user(clock, atlas, project_id, cluster).await?;
+            Ok((creds, false))
         }
     }
 }
@@ -315,7 +320,7 @@ mod tests {
         let store = MemoryStore::with_entry(&account, fresh_creds(now + Duration::hours(1)));
         let atlas = FakeAtlasApi::with_srv("mongodb+srv://fresh.mongodb.net");
 
-        let creds = obtain_credentials(&clock, &store, &atlas, &project(), &cluster())
+        let (creds, _) = obtain_credentials(&clock, &store, &atlas, &project(), &cluster())
             .await
             .unwrap();
 
@@ -331,7 +336,7 @@ mod tests {
         let store = MemoryStore::with_entry(&account, fresh_creds(now - Duration::seconds(1)));
         let atlas = FakeAtlasApi::with_srv("mongodb+srv://fresh.mongodb.net");
 
-        let creds = obtain_credentials(&clock, &store, &atlas, &project(), &cluster())
+        let (creds, _) = obtain_credentials(&clock, &store, &atlas, &project(), &cluster())
             .await
             .unwrap();
 
@@ -347,7 +352,7 @@ mod tests {
         let store = MemoryStore::default();
         let atlas = FakeAtlasApi::with_srv("mongodb+srv://fresh.mongodb.net");
 
-        let creds = obtain_credentials(&clock, &store, &atlas, &project(), &cluster())
+        let (creds, _) = obtain_credentials(&clock, &store, &atlas, &project(), &cluster())
             .await
             .unwrap();
 
@@ -365,7 +370,7 @@ mod tests {
         let store = MemoryStore::default().fail_load();
         let atlas = FakeAtlasApi::with_srv("mongodb+srv://fresh.mongodb.net");
 
-        let creds = obtain_credentials(&clock, &store, &atlas, &project(), &cluster())
+        let (creds, _) = obtain_credentials(&clock, &store, &atlas, &project(), &cluster())
             .await
             .unwrap();
 
@@ -387,7 +392,7 @@ mod tests {
         let store = MemoryStore::with_entry(&account, fresh_creds(now));
         let atlas = FakeAtlasApi::with_srv("mongodb+srv://fresh.mongodb.net");
 
-        let creds = obtain_credentials(&clock, &store, &atlas, &project(), &cluster())
+        let (creds, _) = obtain_credentials(&clock, &store, &atlas, &project(), &cluster())
             .await
             .unwrap();
 
@@ -413,6 +418,49 @@ mod tests {
         let outcome = perform_logout(&store, &project(), &cluster()).unwrap();
 
         assert_eq!(outcome, LogoutOutcome::NothingCached);
+    }
+
+    #[tokio::test]
+    async fn obtain_credentials_reports_true_on_cache_hit() {
+        let now = fixed_now();
+        let clock = FakeClock::new(now);
+        let account = KeyringAccount::new(&project(), &cluster());
+        let store = MemoryStore::with_entry(&account, fresh_creds(now + Duration::hours(1)));
+        let atlas = FakeAtlasApi::with_srv("mongodb+srv://fresh.mongodb.net");
+
+        let (_creds, from_cache) = obtain_credentials(&clock, &store, &atlas, &project(), &cluster())
+            .await
+            .unwrap();
+
+        assert!(from_cache, "unexpired cached creds should report from_cache = true");
+    }
+
+    #[tokio::test]
+    async fn obtain_credentials_reports_false_on_cache_miss() {
+        let clock = FakeClock::new(fixed_now());
+        let store = MemoryStore::default();
+        let atlas = FakeAtlasApi::with_srv("mongodb+srv://fresh.mongodb.net");
+
+        let (_creds, from_cache) = obtain_credentials(&clock, &store, &atlas, &project(), &cluster())
+            .await
+            .unwrap();
+
+        assert!(!from_cache, "cache miss should report from_cache = false");
+    }
+
+    #[tokio::test]
+    async fn obtain_credentials_reports_false_on_expired_cache() {
+        let now = fixed_now();
+        let clock = FakeClock::new(now);
+        let account = KeyringAccount::new(&project(), &cluster());
+        let store = MemoryStore::with_entry(&account, fresh_creds(now - Duration::seconds(1)));
+        let atlas = FakeAtlasApi::with_srv("mongodb+srv://fresh.mongodb.net");
+
+        let (_creds, from_cache) = obtain_credentials(&clock, &store, &atlas, &project(), &cluster())
+            .await
+            .unwrap();
+
+        assert!(!from_cache, "expired cache should report from_cache = false");
     }
 
     #[test]
