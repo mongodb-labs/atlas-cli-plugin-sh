@@ -44,6 +44,10 @@ impl CachedCredentials {
     }
 }
 
+fn parse_cached_json(json: &str) -> Result<CachedCredentials, serde_json::Error> {
+    serde_json::from_str(json)
+}
+
 /// Load cached credentials from the OS keychain.
 ///
 /// - `Ok(Some(creds))` when an entry exists and parses cleanly.
@@ -60,11 +64,17 @@ pub(crate) fn load(account: &KeyringAccount) -> Result<Option<CachedCredentials>
         Entry::new(KEYRING_SERVICE, account.as_str()).context("failed to open keyring entry")?;
 
     match entry.get_password() {
-        Ok(json) => {
-            let creds: CachedCredentials =
-                serde_json::from_str(&json).context("failed to parse cached credentials")?;
-            Ok(Some(creds))
-        }
+        Ok(json) => match parse_cached_json(&json) {
+            Ok(creds) => Ok(Some(creds)),
+            Err(e) => {
+                tracing::warn!(%e, "corrupted cached credentials, treating as cache miss");
+                eprintln!(
+                    "{}: Cached credentials corrupted \u{2014} creating new user.",
+                    console::style("warning").yellow().bold()
+                );
+                Ok(None)
+            }
+        },
         Err(keyring::Error::NoEntry) => Ok(None),
         Err(e) => Err(anyhow::anyhow!("keyring error: {e}")),
     }
@@ -167,5 +177,19 @@ mod tests {
         // on different platforms; the assertion documents the format the
         // keyring sees.
         assert_eq!(account.as_str(), "p:c");
+    }
+
+    #[test]
+    fn parse_cached_json_returns_err_for_corrupt_input() {
+        assert!(parse_cached_json("this is not json").is_err());
+    }
+
+    #[test]
+    fn parse_cached_json_returns_creds_for_valid_json() {
+        let creds = fresh_creds();
+        let json = serde_json::to_string(&creds).unwrap();
+        let result = parse_cached_json(&json);
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap().username.as_str(), "atlas-sh-user");
     }
 }
