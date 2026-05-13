@@ -25,22 +25,11 @@ Examples:
   atlas sh --cluster MyCluster --profile staging --project-id 5f1b...
 
   # Forward flags to mongosh
-  atlas sh --cluster MyCluster --quiet --norc";
+  atlas sh --cluster MyCluster --quiet --norc
 
-const LOGOUT_LONG_ABOUT: &str = "\
-Remove cached credentials for an Atlas cluster from the OS keychain.
+  # Clear cached credentials for a cluster
+  atlas sh --cluster MyCluster --clear-cache";
 
-The next `atlas sh` invocation against this cluster will provision a fresh
-temporary database user. Atlas itself revokes the previous user when its TTL
-expires; this command only clears the local cache.";
-
-const LOGOUT_AFTER_LONG_HELP: &str = "\
-Examples:
-  # Forget cached credentials for MyCluster
-  atlas sh logout --cluster MyCluster
-
-  # Same, against a non-default profile
-  atlas sh logout --cluster MyCluster --profile staging";
 
 #[derive(Debug, Parser)]
 #[command(
@@ -63,13 +52,6 @@ pub(crate) enum PluginSubCommands {
         after_long_help = SH_AFTER_LONG_HELP,
     )]
     Sh(ShArgs),
-
-    #[command(
-        about = "[preview] Remove cached credentials for a cluster from the OS keychain",
-        long_about = LOGOUT_LONG_ABOUT,
-        after_long_help = LOGOUT_AFTER_LONG_HELP,
-    )]
-    Logout(LogoutArgs),
 }
 
 /// Connection-targeting arguments shared by every subcommand.
@@ -119,6 +101,17 @@ pub(crate) struct ShArgs {
     #[command(flatten)]
     pub(crate) connection: ConnectionArgs,
 
+    /// Remove cached credentials from the OS keychain and exit
+    #[arg(
+        long,
+        default_value_t = false,
+        long_help = "Remove cached credentials for the cluster from the OS keychain and exit.\n\n\
+                     The next invocation will provision a fresh temporary database user.\n\
+                     Atlas itself revokes the previous user when its TTL expires;\n\
+                     this flag only clears the local cache."
+    )]
+    pub(crate) clear_cache: bool,
+
     /// Arguments forwarded to mongosh (e.g. --eval, --quiet, --norc)
     #[arg(
         trailing_var_arg = true,
@@ -136,12 +129,6 @@ pub(crate) struct ShArgs {
     pub(crate) mongosh_args: Vec<String>,
 }
 
-#[derive(Debug, Args)]
-pub(crate) struct LogoutArgs {
-    #[command(flatten)]
-    pub(crate) connection: ConnectionArgs,
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -150,14 +137,6 @@ mod tests {
     fn parse_sh(args: &[&str]) -> ShArgs {
         match Cli::try_parse_from(args).unwrap().command {
             PluginSubCommands::Sh(a) => a,
-            PluginSubCommands::Logout(_) => panic!("expected sh subcommand, got logout"),
-        }
-    }
-
-    fn parse_logout(args: &[&str]) -> LogoutArgs {
-        match Cli::try_parse_from(args).unwrap().command {
-            PluginSubCommands::Logout(a) => a,
-            PluginSubCommands::Sh(_) => panic!("expected logout subcommand, got sh"),
         }
     }
 
@@ -231,23 +210,15 @@ mod tests {
     }
 
     #[test]
-    fn parses_logout_subcommand() {
-        let args = parse_logout(&["atlas", "logout", "--cluster", "my-cluster"]);
+    fn clear_cache_flag_parses() {
+        let args = parse_sh(&["atlas", "sh", "--cluster", "my-cluster", "--clear-cache"]);
         assert_eq!(args.connection.cluster, "my-cluster");
-        assert_eq!(args.connection.profile, "default");
+        assert!(args.clear_cache);
     }
 
     #[test]
-    fn logout_accepts_aliases() {
-        let args = parse_logout(&[
-            "atlas",
-            "logout",
-            "--clusterName",
-            "prod",
-            "--projectId",
-            "abc123",
-        ]);
-        assert_eq!(args.connection.cluster, "prod");
-        assert_eq!(args.connection.project_id.as_deref(), Some("abc123"));
+    fn clear_cache_defaults_false() {
+        let args = parse_sh(&["atlas", "sh", "--cluster", "my-cluster"]);
+        assert!(!args.clear_cache);
     }
 }

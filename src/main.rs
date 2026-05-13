@@ -17,7 +17,7 @@ mod credentials;
 mod deps;
 mod domain;
 
-use args::{Cli, ConnectionArgs, LogoutArgs, PluginSubCommands, ShArgs};
+use args::{Cli, ConnectionArgs, PluginSubCommands, ShArgs};
 use credentials::CachedCredentials;
 use deps::{AtlasApi, AtlasApiClient, Clock, CredentialStore, KeyringStore, SystemClock};
 use domain::{ClusterName, ConnectionString, KeyringAccount, Password, ProjectId, Username};
@@ -30,7 +30,6 @@ async fn main() -> Result<()> {
 
     match Cli::parse().command {
         PluginSubCommands::Sh(args) => run_sh(args).await,
-        PluginSubCommands::Logout(args) => run_logout(&args),
     }
 }
 
@@ -38,13 +37,30 @@ async fn main() -> Result<()> {
 
 async fn run_sh(args: ShArgs) -> Result<()> {
     let client = build_client(&args.connection.profile)?;
+    let project_id = resolve_project_id(&args.connection, client.config())?;
+    let cluster = ClusterName::from(args.connection.cluster.as_str());
+
+    if args.clear_cache {
+        let outcome = perform_logout(&KeyringStore, &project_id, &cluster)?;
+        match outcome {
+            LogoutOutcome::Removed => {
+                tracing::info!(%project_id, %cluster, "removed cached credentials");
+                println!(
+                    "Removed cached credentials for cluster '{cluster}' in project '{project_id}'."
+                );
+            }
+            LogoutOutcome::NothingCached => {
+                println!(
+                    "No cached credentials for cluster '{cluster}' in project '{project_id}'."
+                );
+            }
+        }
+        return Ok(());
+    }
 
     // Fail fast: find mongosh before any API calls.
     let mongosh_path = resolve_mongosh(client.config())?;
     tracing::debug!(path = %mongosh_path.display(), "found mongosh");
-
-    let project_id = resolve_project_id(&args.connection, client.config())?;
-    let cluster = ClusterName::from(args.connection.cluster.as_str());
 
     tracing::debug!(
         profile = %args.connection.profile,
@@ -58,26 +74,6 @@ async fn run_sh(args: ShArgs) -> Result<()> {
         obtain_credentials(&SystemClock, &KeyringStore, &atlas, &project_id, &cluster).await?;
 
     launch_mongosh(&mongosh_path, &credentials, &args.mongosh_args).map(|_: Infallible| ())
-}
-
-fn run_logout(args: &LogoutArgs) -> Result<()> {
-    let client = build_client(&args.connection.profile)?;
-    let project_id = resolve_project_id(&args.connection, client.config())?;
-    let cluster = ClusterName::from(args.connection.cluster.as_str());
-
-    let outcome = perform_logout(&KeyringStore, &project_id, &cluster)?;
-    match outcome {
-        LogoutOutcome::Removed => {
-            tracing::info!(%project_id, %cluster, "removed cached credentials");
-            println!(
-                "Removed cached credentials for cluster '{cluster}' in project '{project_id}'."
-            );
-        }
-        LogoutOutcome::NothingCached => {
-            println!("No cached credentials for cluster '{cluster}' in project '{project_id}'.");
-        }
-    }
-    Ok(())
 }
 
 // --- Orchestration (testable) ---------------------------------------------

@@ -8,5 +8,3 @@ binary: ${BINARY}
 commands:
   sh:
     description: Launch mongosh connected to an Atlas cluster
-  logout:
-    description: Remove cached credentials for an Atlas cluster
