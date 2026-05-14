@@ -24,13 +24,25 @@ use domain::{ClusterName, ConnectionString, KeyringAccount, Password, ProjectId,
 use error::UserError;
 
 #[tokio::main(flavor = "current_thread")]
-async fn main() -> Result<()> {
+async fn main() -> std::process::ExitCode {
     tracing_subscriber::fmt()
         .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
         .init();
 
-    match Cli::parse().command {
+    let result = match Cli::parse().command {
         PluginSubCommands::Sh(args) => run_sh(args).await,
+    };
+
+    match result {
+        Ok(()) => std::process::ExitCode::SUCCESS,
+        Err(err) => {
+            if let Some(user_err) = err.downcast_ref::<UserError>() {
+                eprintln!("{user_err}");
+            } else {
+                eprintln!("{}: {err:#}", console::style("error").red().bold());
+            }
+            std::process::ExitCode::FAILURE
+        }
     }
 }
 
