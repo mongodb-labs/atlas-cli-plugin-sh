@@ -97,7 +97,7 @@ fn map_atlas_error(err: &OperationError, ctx: AtlasErrorContext) -> anyhow::Erro
                 || {
                     UserError::AtlasApiError {
                         action: ctx.action,
-                        status: StatusCode::NOT_FOUND.as_u16(),
+                        status: Some(StatusCode::NOT_FOUND.as_u16()),
                         detail: "resource not found".into(),
                     }
                     .into()
@@ -107,13 +107,13 @@ fn map_atlas_error(err: &OperationError, ctx: AtlasErrorContext) -> anyhow::Erro
         }
         OperationError::Atlas { status, .. } => UserError::AtlasApiError {
             action: ctx.action,
-            status: status.as_u16(),
+            status: Some(status.as_u16()),
             detail: err.to_string(),
         }
         .into(),
         _ => UserError::AtlasApiError {
             action: ctx.action,
-            status: 0,
+            status: None,
             detail: err.to_string(),
         }
         .into(),

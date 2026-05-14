@@ -86,11 +86,11 @@ async fn run_sh(args: ShArgs) -> Result<()> {
     let (credentials, from_cache) =
         obtain_credentials(&SystemClock, &KeyringStore, &atlas, &project_id, &cluster).await?;
 
-    let account = KeyringAccount::new(&project_id, &cluster);
     let exit_code = launch_mongosh(&mongosh_path, &credentials, &args.mongosh_args)?;
 
-    if exit_code != 0 {
+    if exit_code != Some(0) {
         if from_cache {
+            let account = KeyringAccount::new(&project_id, &cluster);
             eprintln!(
                 "{}: Cached credentials may be invalid \u{2014} retrying with a fresh user.",
                 console::style("warning").yellow().bold()
@@ -103,16 +103,16 @@ async fn run_sh(args: ShArgs) -> Result<()> {
                     .await?;
             let exit_code2 =
                 launch_mongosh(&mongosh_path, &fresh_creds, &args.mongosh_args)?;
-            if exit_code2 != 0 {
+            if exit_code2 != Some(0) {
                 return Err(UserError::MongoshFailed {
-                    exit_code: Some(exit_code2),
+                    exit_code: exit_code2,
                     cluster: cluster.to_string(),
                 }
                 .into());
             }
         } else {
             return Err(UserError::MongoshFailed {
-                exit_code: Some(exit_code),
+                exit_code,
                 cluster: cluster.to_string(),
             }
             .into());
@@ -309,14 +309,14 @@ fn launch_mongosh(
     mongosh_path: &Path,
     creds: &CachedCredentials,
     extra_args: &[String],
-) -> Result<i32> {
+) -> Result<Option<i32>> {
     let status = build_mongosh_command(mongosh_path, creds, extra_args)
         .status()
         .map_err(|e| -> anyhow::Error {
             tracing::debug!(%e, "failed to spawn mongosh process");
             UserError::MongoshNotFound.into()
         })?;
-    Ok(status.code().unwrap_or(1))
+    Ok(status.code())
 }
 
 #[cfg(test)]

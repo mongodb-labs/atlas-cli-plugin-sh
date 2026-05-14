@@ -8,7 +8,7 @@ pub(crate) enum UserError {
     ClusterNotFound { cluster: String, project_id: String },
     ProjectNotConfigured,
     MongoshNotFound,
-    AtlasApiError { action: &'static str, status: u16, detail: String },
+    AtlasApiError { action: &'static str, status: Option<u16>, detail: String },
     MongoshFailed { exit_code: Option<i32>, cluster: String },
     ProjectNotFound { project_id: String },
 }
@@ -50,12 +50,12 @@ impl fmt::Display for UserError {
                 )
             }
             Self::AtlasApiError { action, status, detail } => {
-                writeln!(f, "{error}: Atlas API error while {action} (HTTP {status})")?;
-                writeln!(f, "  detail: {detail}")?;
-                write!(
-                    f,
-                    "  {hint}: Check Atlas status at https://status.mongodb.com"
-                )
+                writeln!(f, "{error}: Atlas API error while {action}")?;
+                if let Some(code) = status {
+                    write!(f, "  {hint}: {detail} (HTTP {code})")
+                } else {
+                    write!(f, "  {hint}: {detail}")
+                }
             }
             Self::MongoshFailed { exit_code, cluster } => {
                 let code = exit_code
@@ -121,7 +121,7 @@ mod tests {
     fn atlas_api_error_includes_action_and_status() {
         let err = UserError::AtlasApiError {
             action: "fetch cluster",
-            status: 500,
+            status: Some(500),
             detail: "Internal Server Error".into(),
         };
         let msg = err.to_string();
