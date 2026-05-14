@@ -300,7 +300,10 @@ fn launch_mongosh(
 ) -> Result<i32> {
     let status = build_mongosh_command(mongosh_path, creds, extra_args)
         .status()
-        .map_err(|e| anyhow::anyhow!("Failed to launch mongosh: {e}"))?;
+        .map_err(|e| {
+            tracing::debug!(%e, "failed to spawn mongosh process");
+            anyhow::Error::from(UserError::MongoshNotFound)
+        })?;
     Ok(status.code().unwrap_or(1))
 }
 
