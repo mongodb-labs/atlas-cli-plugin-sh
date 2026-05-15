@@ -1,8 +1,7 @@
-use std::convert::Infallible;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use anyhow::{anyhow, Context, Result};
+use anyhow::Result;
 use chrono::Duration;
 use clap::Parser;
 use mongodb_atlas_cli::atlas::client::AtlasClient;
@@ -16,20 +15,34 @@ mod atlas_ops;
 mod credentials;
 mod deps;
 mod domain;
+mod error;
 
 use args::{Cli, ConnectionArgs, PluginSubCommands, ShArgs};
 use credentials::CachedCredentials;
 use deps::{AtlasApi, AtlasApiClient, Clock, CredentialStore, KeyringStore, SystemClock};
 use domain::{ClusterName, ConnectionString, KeyringAccount, Password, ProjectId, Username};
+use error::UserError;
 
 #[tokio::main(flavor = "current_thread")]
-async fn main() -> Result<()> {
+async fn main() -> std::process::ExitCode {
     tracing_subscriber::fmt()
         .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
         .init();
 
-    match Cli::parse().command {
+    let result = match Cli::parse().command {
         PluginSubCommands::Sh(args) => run_sh(args).await,
+    };
+
+    match result {
+        Ok(()) => std::process::ExitCode::SUCCESS,
+        Err(err) => {
+            if let Some(user_err) = err.downcast_ref::<UserError>() {
+                eprintln!("{user_err}");
+            } else {
+                eprintln!("{}: {err:#}", console::style("error").red().bold());
+            }
+            std::process::ExitCode::FAILURE
+        }
     }
 }
 
@@ -70,10 +83,42 @@ async fn run_sh(args: ShArgs) -> Result<()> {
     );
 
     let atlas = AtlasApiClient::new(&client);
-    let credentials =
+    let (credentials, from_cache) =
         obtain_credentials(&SystemClock, &KeyringStore, &atlas, &project_id, &cluster).await?;
 
-    launch_mongosh(&mongosh_path, &credentials, &args.mongosh_args).map(|_: Infallible| ())
+    let exit_code = launch_mongosh(&mongosh_path, &credentials, &args.mongosh_args)?;
+
+    if exit_code != Some(0) {
+        if from_cache {
+            let account = KeyringAccount::new(&project_id, &cluster);
+            eprintln!(
+                "{}: Cached credentials may be invalid \u{2014} retrying with a fresh user.",
+                console::style("warning").yellow().bold()
+            );
+            if let Err(e) = KeyringStore.invalidate(&account) {
+                tracing::warn!(%e, "failed to invalidate cached credentials before retry");
+            }
+            let (fresh_creds, _) =
+                obtain_credentials(&SystemClock, &KeyringStore, &atlas, &project_id, &cluster)
+                    .await?;
+            let exit_code2 = launch_mongosh(&mongosh_path, &fresh_creds, &args.mongosh_args)?;
+            if exit_code2 != Some(0) {
+                return Err(UserError::MongoshFailed {
+                    exit_code: exit_code2,
+                    cluster: cluster.to_string(),
+                }
+                .into());
+            }
+        } else {
+            return Err(UserError::MongoshFailed {
+                exit_code,
+                cluster: cluster.to_string(),
+            }
+            .into());
+        }
+    }
+
+    Ok(())
 }
 
 // --- Orchestration (testable) ---------------------------------------------
@@ -84,13 +129,16 @@ async fn run_sh(args: ShArgs) -> Result<()> {
 /// provisioning a fresh temporary user via the Atlas API. Falls back to an
 /// uncached creation when the keyring is unavailable so the user is never
 /// blocked by a broken credential store.
+///
+/// The returned bool is `true` when credentials came from cache (unexpired),
+/// `false` when freshly provisioned.
 async fn obtain_credentials<C, S, A>(
     clock: &C,
     store: &S,
     atlas: &A,
     project_id: &ProjectId,
     cluster: &ClusterName,
-) -> Result<CachedCredentials>
+) -> Result<(CachedCredentials, bool)>
 where
     C: Clock,
     S: CredentialStore,
@@ -104,7 +152,7 @@ where
                 expires_at = %creds.expires_at,
                 "using cached credentials",
             );
-            Ok(creds)
+            Ok((creds, true))
         }
         Ok(cached) => {
             if cached.is_some() {
@@ -112,11 +160,14 @@ where
             } else {
                 tracing::info!("no cached credentials, creating new user");
             }
-            create_and_cache(clock, store, atlas, project_id, cluster, &account).await
+            let creds =
+                create_and_cache(clock, store, atlas, project_id, cluster, &account).await?;
+            Ok((creds, false))
         }
         Err(err) => {
             tracing::warn!(%err, "keyring unavailable, creating new user without caching");
-            create_user(clock, atlas, project_id, cluster).await
+            let creds = create_user(clock, atlas, project_id, cluster).await?;
+            Ok((creds, false))
         }
     }
 }
@@ -208,8 +259,10 @@ fn generate_password() -> Password {
 // --- Process-level helpers ------------------------------------------------
 
 fn build_client(profile: &str) -> Result<AtlasClient> {
-    AtlasClient::with_profile(profile)
-        .context("Failed to create Atlas client. Run 'atlas auth login' and try again.")
+    AtlasClient::with_profile(profile).map_err(|e| {
+        tracing::debug!(%e, "failed to create Atlas client");
+        UserError::NotAuthenticated.into()
+    })
 }
 
 fn resolve_project_id(args: &ConnectionArgs, config: &AtlasCLIConfig) -> Result<ProjectId> {
@@ -217,12 +270,7 @@ fn resolve_project_id(args: &ConnectionArgs, config: &AtlasCLIConfig) -> Result<
         .as_deref()
         .or(config.project_id.as_deref())
         .map(ProjectId::from)
-        .ok_or_else(|| {
-            anyhow!(
-                "No project ID configured. Use --project-id or run \
-                 'atlas config set project_id <id>'"
-            )
-        })
+        .ok_or_else(|| UserError::ProjectNotConfigured.into())
 }
 
 fn resolve_mongosh(config: &AtlasCLIConfig) -> Result<PathBuf> {
@@ -236,8 +284,10 @@ fn resolve_mongosh(config: &AtlasCLIConfig) -> Result<PathBuf> {
             "mongosh_path from config does not exist, falling back to PATH",
         );
     }
-    which::which("mongosh")
-        .with_context(|| "mongosh not found. Install: https://www.mongodb.com/try/download/shell")
+    which::which("mongosh").map_err(|e| {
+        tracing::debug!(%e, "mongosh not found on PATH");
+        UserError::MongoshNotFound.into()
+    })
 }
 
 fn build_mongosh_command(
@@ -255,27 +305,18 @@ fn build_mongosh_command(
     cmd
 }
 
-#[cfg(unix)]
 fn launch_mongosh(
     mongosh_path: &Path,
     creds: &CachedCredentials,
     extra_args: &[String],
-) -> Result<Infallible> {
-    use std::os::unix::process::CommandExt;
-    let err = build_mongosh_command(mongosh_path, creds, extra_args).exec();
-    Err(anyhow!("Failed to exec mongosh: {err}"))
-}
-
-#[cfg(not(unix))]
-fn launch_mongosh(
-    mongosh_path: &Path,
-    creds: &CachedCredentials,
-    extra_args: &[String],
-) -> Result<Infallible> {
+) -> Result<Option<i32>> {
     let status = build_mongosh_command(mongosh_path, creds, extra_args)
         .status()
-        .context("Failed to launch mongosh")?;
-    std::process::exit(status.code().unwrap_or(1));
+        .map_err(|e| -> anyhow::Error {
+            tracing::debug!(%e, "failed to spawn mongosh process");
+            UserError::MongoshNotFound.into()
+        })?;
+    Ok(status.code())
 }
 
 #[cfg(test)]
@@ -314,7 +355,7 @@ mod tests {
         let store = MemoryStore::with_entry(&account, fresh_creds(now + Duration::hours(1)));
         let atlas = FakeAtlasApi::with_srv("mongodb+srv://fresh.mongodb.net");
 
-        let creds = obtain_credentials(&clock, &store, &atlas, &project(), &cluster())
+        let (creds, _) = obtain_credentials(&clock, &store, &atlas, &project(), &cluster())
             .await
             .unwrap();
 
@@ -330,7 +371,7 @@ mod tests {
         let store = MemoryStore::with_entry(&account, fresh_creds(now - Duration::seconds(1)));
         let atlas = FakeAtlasApi::with_srv("mongodb+srv://fresh.mongodb.net");
 
-        let creds = obtain_credentials(&clock, &store, &atlas, &project(), &cluster())
+        let (creds, _) = obtain_credentials(&clock, &store, &atlas, &project(), &cluster())
             .await
             .unwrap();
 
@@ -346,7 +387,7 @@ mod tests {
         let store = MemoryStore::default();
         let atlas = FakeAtlasApi::with_srv("mongodb+srv://fresh.mongodb.net");
 
-        let creds = obtain_credentials(&clock, &store, &atlas, &project(), &cluster())
+        let (creds, _) = obtain_credentials(&clock, &store, &atlas, &project(), &cluster())
             .await
             .unwrap();
 
@@ -364,7 +405,7 @@ mod tests {
         let store = MemoryStore::default().fail_load();
         let atlas = FakeAtlasApi::with_srv("mongodb+srv://fresh.mongodb.net");
 
-        let creds = obtain_credentials(&clock, &store, &atlas, &project(), &cluster())
+        let (creds, _) = obtain_credentials(&clock, &store, &atlas, &project(), &cluster())
             .await
             .unwrap();
 
@@ -386,7 +427,7 @@ mod tests {
         let store = MemoryStore::with_entry(&account, fresh_creds(now));
         let atlas = FakeAtlasApi::with_srv("mongodb+srv://fresh.mongodb.net");
 
-        let creds = obtain_credentials(&clock, &store, &atlas, &project(), &cluster())
+        let (creds, _) = obtain_credentials(&clock, &store, &atlas, &project(), &cluster())
             .await
             .unwrap();
 
@@ -412,6 +453,58 @@ mod tests {
         let outcome = perform_logout(&store, &project(), &cluster()).unwrap();
 
         assert_eq!(outcome, LogoutOutcome::NothingCached);
+    }
+
+    #[tokio::test]
+    async fn obtain_credentials_reports_true_on_cache_hit() {
+        let now = fixed_now();
+        let clock = FakeClock::new(now);
+        let account = KeyringAccount::new(&project(), &cluster());
+        let store = MemoryStore::with_entry(&account, fresh_creds(now + Duration::hours(1)));
+        let atlas = FakeAtlasApi::with_srv("mongodb+srv://fresh.mongodb.net");
+
+        let (_creds, from_cache) =
+            obtain_credentials(&clock, &store, &atlas, &project(), &cluster())
+                .await
+                .unwrap();
+
+        assert!(
+            from_cache,
+            "unexpired cached creds should report from_cache = true"
+        );
+    }
+
+    #[tokio::test]
+    async fn obtain_credentials_reports_false_on_cache_miss() {
+        let clock = FakeClock::new(fixed_now());
+        let store = MemoryStore::default();
+        let atlas = FakeAtlasApi::with_srv("mongodb+srv://fresh.mongodb.net");
+
+        let (_creds, from_cache) =
+            obtain_credentials(&clock, &store, &atlas, &project(), &cluster())
+                .await
+                .unwrap();
+
+        assert!(!from_cache, "cache miss should report from_cache = false");
+    }
+
+    #[tokio::test]
+    async fn obtain_credentials_reports_false_on_expired_cache() {
+        let now = fixed_now();
+        let clock = FakeClock::new(now);
+        let account = KeyringAccount::new(&project(), &cluster());
+        let store = MemoryStore::with_entry(&account, fresh_creds(now - Duration::seconds(1)));
+        let atlas = FakeAtlasApi::with_srv("mongodb+srv://fresh.mongodb.net");
+
+        let (_creds, from_cache) =
+            obtain_credentials(&clock, &store, &atlas, &project(), &cluster())
+                .await
+                .unwrap();
+
+        assert!(
+            !from_cache,
+            "expired cache should report from_cache = false"
+        );
     }
 
     #[test]

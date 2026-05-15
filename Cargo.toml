@@ -13,6 +13,7 @@ bytes = "1"
 typed-builder = "0.23"
 http = "1"
 chrono = { version = "0.4", features = ["serde"] }
+console = "0.15"
 clap = { version = "4.6.1", features = ["derive"] }
 keyring = { version = "3", default-features = false, features = ["linux-native", "apple-native", "windows-native"] }
 mongodb-atlas-cli = { version = "0.2.1", features = ["derive"] }
