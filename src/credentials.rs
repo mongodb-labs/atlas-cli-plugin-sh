@@ -53,7 +53,7 @@ fn parse_cached_json(json: &str) -> Result<CachedCredentials, serde_json::Error>
 /// - `Ok(Some(creds))` when an entry exists and parses cleanly.
 /// - `Ok(None)` when no entry exists for `account`, or when the cached JSON is
 ///   corrupt (prints a warning and treats as a miss — not an error).
-/// - `Err(_)` when the keyring is unavailable (DBus down, permission denied, …).
+/// - `Err(_)` when the keyring is unavailable (`DBus` down, permission denied, …).
 ///
 /// All keyring failures collapse into `anyhow::Error`. The only consumer is
 /// `main`, which degrades gracefully on any error by re-provisioning a user.

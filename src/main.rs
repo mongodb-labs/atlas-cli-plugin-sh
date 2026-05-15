@@ -101,8 +101,7 @@ async fn run_sh(args: ShArgs) -> Result<()> {
             let (fresh_creds, _) =
                 obtain_credentials(&SystemClock, &KeyringStore, &atlas, &project_id, &cluster)
                     .await?;
-            let exit_code2 =
-                launch_mongosh(&mongosh_path, &fresh_creds, &args.mongosh_args)?;
+            let exit_code2 = launch_mongosh(&mongosh_path, &fresh_creds, &args.mongosh_args)?;
             if exit_code2 != Some(0) {
                 return Err(UserError::MongoshFailed {
                     exit_code: exit_code2,
@@ -161,7 +160,8 @@ where
             } else {
                 tracing::info!("no cached credentials, creating new user");
             }
-            let creds = create_and_cache(clock, store, atlas, project_id, cluster, &account).await?;
+            let creds =
+                create_and_cache(clock, store, atlas, project_id, cluster, &account).await?;
             Ok((creds, false))
         }
         Err(err) => {
@@ -463,11 +463,15 @@ mod tests {
         let store = MemoryStore::with_entry(&account, fresh_creds(now + Duration::hours(1)));
         let atlas = FakeAtlasApi::with_srv("mongodb+srv://fresh.mongodb.net");
 
-        let (_creds, from_cache) = obtain_credentials(&clock, &store, &atlas, &project(), &cluster())
-            .await
-            .unwrap();
+        let (_creds, from_cache) =
+            obtain_credentials(&clock, &store, &atlas, &project(), &cluster())
+                .await
+                .unwrap();
 
-        assert!(from_cache, "unexpired cached creds should report from_cache = true");
+        assert!(
+            from_cache,
+            "unexpired cached creds should report from_cache = true"
+        );
     }
 
     #[tokio::test]
@@ -476,9 +480,10 @@ mod tests {
         let store = MemoryStore::default();
         let atlas = FakeAtlasApi::with_srv("mongodb+srv://fresh.mongodb.net");
 
-        let (_creds, from_cache) = obtain_credentials(&clock, &store, &atlas, &project(), &cluster())
-            .await
-            .unwrap();
+        let (_creds, from_cache) =
+            obtain_credentials(&clock, &store, &atlas, &project(), &cluster())
+                .await
+                .unwrap();
 
         assert!(!from_cache, "cache miss should report from_cache = false");
     }
@@ -491,11 +496,15 @@ mod tests {
         let store = MemoryStore::with_entry(&account, fresh_creds(now - Duration::seconds(1)));
         let atlas = FakeAtlasApi::with_srv("mongodb+srv://fresh.mongodb.net");
 
-        let (_creds, from_cache) = obtain_credentials(&clock, &store, &atlas, &project(), &cluster())
-            .await
-            .unwrap();
+        let (_creds, from_cache) =
+            obtain_credentials(&clock, &store, &atlas, &project(), &cluster())
+                .await
+                .unwrap();
 
-        assert!(!from_cache, "expired cache should report from_cache = false");
+        assert!(
+            !from_cache,
+            "expired cache should report from_cache = false"
+        );
     }
 
     #[test]

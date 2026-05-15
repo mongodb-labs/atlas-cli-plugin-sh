@@ -5,12 +5,24 @@ use console::style;
 #[derive(Debug)]
 pub(crate) enum UserError {
     NotAuthenticated,
-    ClusterNotFound { cluster: String, project_id: String },
+    ClusterNotFound {
+        cluster: String,
+        project_id: String,
+    },
     ProjectNotConfigured,
     MongoshNotFound,
-    AtlasApiError { action: &'static str, status: Option<u16>, detail: String },
-    MongoshFailed { exit_code: Option<i32>, cluster: String },
-    ProjectNotFound { project_id: String },
+    AtlasApiError {
+        action: &'static str,
+        status: Option<u16>,
+        detail: String,
+    },
+    MongoshFailed {
+        exit_code: Option<i32>,
+        cluster: String,
+    },
+    ProjectNotFound {
+        project_id: String,
+    },
 }
 
 impl fmt::Display for UserError {
@@ -22,7 +34,10 @@ impl fmt::Display for UserError {
                 writeln!(f, "{error}: Authentication failed")?;
                 write!(f, "  {hint}: Run 'atlas auth login' and try again.")
             }
-            Self::ClusterNotFound { cluster, project_id } => {
+            Self::ClusterNotFound {
+                cluster,
+                project_id,
+            } => {
                 writeln!(
                     f,
                     "{error}: Cluster '{cluster}' not found in project '{project_id}'"
@@ -49,7 +64,11 @@ impl fmt::Display for UserError {
                      https://www.mongodb.com/try/download/shell"
                 )
             }
-            Self::AtlasApiError { action, status, detail } => {
+            Self::AtlasApiError {
+                action,
+                status,
+                detail,
+            } => {
                 writeln!(f, "{error}: Atlas API error while {action}")?;
                 if let Some(code) = status {
                     write!(f, "  {hint}: {detail} (HTTP {code})")
@@ -58,8 +77,7 @@ impl fmt::Display for UserError {
                 }
             }
             Self::MongoshFailed { exit_code, cluster } => {
-                let code = exit_code
-                    .map_or_else(|| "unknown".to_owned(), |c| c.to_string());
+                let code = exit_code.map_or_else(|| "unknown".to_owned(), |c| c.to_string());
                 writeln!(f, "{error}: mongosh exited with code {code}")?;
                 write!(
                     f,
