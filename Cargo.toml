@@ -46,6 +46,5 @@ missing_panics_doc = "allow"
 # force `Mutex`/`Arc` in test fakes for no runtime benefit.
 future_not_send = "allow"
 
-[profile.dist]
-inherits = "release"
+[profile.release]
 lto = "thin"
