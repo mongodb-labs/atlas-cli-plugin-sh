@@ -1,0 +1,395 @@
+stepback: false
+
+exec_timeout_secs: 1800
+
+functions:
+  "fetch source":
+    - command: git.get_project
+      params:
+        directory: src
+
+  "install rust":
+    - command: shell.exec
+      params:
+        working_dir: src
+        shell: bash
+        script: |
+          set -Eeou pipefail
+          if ! command -v cargo >/dev/null 2>&1; then
+            curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable --profile minimal
+          fi
+
+  "build":
+    - command: shell.exec
+      params:
+        working_dir: src
+        shell: bash
+        script: |
+          set -Eeou pipefail
+          export PATH="$HOME/.cargo/bin:$PATH"
+          .evergreen/scripts/build.sh "${target}"
+
+  "upload binary":
+    - command: s3.put
+      params:
+        aws_key: ${aws_key}
+        aws_secret: ${aws_secret}
+        local_file: src/target/${target}/release/atlas-cli-plugin-sh${binary_ext}
+        remote_file: ${project}/${version_id}/binaries/${target}/atlas-cli-plugin-sh${binary_ext}
+        bucket: ${release_bucket}
+        permissions: private
+        content_type: application/octet-stream
+
+  "download binary":
+    - command: s3.get
+      params:
+        aws_key: ${aws_key}
+        aws_secret: ${aws_secret}
+        remote_file: ${project}/${version_id}/binaries/${target}/atlas-cli-plugin-sh${binary_ext}
+        bucket: ${release_bucket}
+        local_file: src/incoming-binaries/${target}/atlas-cli-plugin-sh${binary_ext}
+
+  "install macos notarization service":
+    - command: shell.exec
+      params:
+        working_dir: src
+        shell: bash
+        include_expansions_in_env:
+          - notary_service_url
+        script: |
+          set -Eeou pipefail
+          .evergreen/scripts/install-macnotary.sh "${notary_service_url}" "$(pwd)/.macnotary"
+
+  "notarize macos binaries":
+    - command: shell.exec
+      params:
+        working_dir: src
+        shell: bash
+        include_expansions_in_env:
+          - notary_service_key_id
+          - notary_service_secret
+        script: |
+          set -Eeou pipefail
+          export MACOS_NOTARY_KEY="${notary_service_key_id}"
+          export MACOS_NOTARY_SECRET="${notary_service_secret}"
+          .evergreen/scripts/notarize-macos.sh \
+            "$(pwd)/.macnotary/linux_amd64/macnotary" \
+            "https://dev.macos-notary.build.10gen.cc/api" \
+            "com.mongodb.atlas-cli-plugin-sh" \
+            incoming-binaries/aarch64-apple-darwin/atlas-cli-plugin-sh \
+            incoming-binaries/x86_64-apple-darwin/atlas-cli-plugin-sh
+
+  "upload notarized binary":
+    - command: s3.put
+      params:
+        aws_key: ${aws_key}
+        aws_secret: ${aws_secret}
+        local_file: src/incoming-binaries/${target}/atlas-cli-plugin-sh
+        remote_file: ${project}/${version_id}/binaries-notarized/${target}/atlas-cli-plugin-sh
+        bucket: ${release_bucket}
+        permissions: private
+        content_type: application/octet-stream
+
+  "download notarized binary":
+    - command: s3.get
+      params:
+        aws_key: ${aws_key}
+        aws_secret: ${aws_secret}
+        remote_file: ${project}/${version_id}/binaries-notarized/${target}/atlas-cli-plugin-sh
+        bucket: ${release_bucket}
+        local_file: src/incoming-binaries/${target}/atlas-cli-plugin-sh
+
+  "package one target":
+    - command: shell.exec
+      params:
+        working_dir: src
+        shell: bash
+        script: |
+          set -Eeou pipefail
+          .evergreen/scripts/package.sh "${target}" "incoming-binaries/${target}/atlas-cli-plugin-sh${binary_ext}" "$(pwd)/artifacts"
+
+  "create github release":
+    - command: github.generate_token
+      params:
+        expansion_name: github_token
+    - command: shell.exec
+      params:
+        working_dir: src
+        shell: bash
+        env:
+          GH_TOKEN: ${github_token}
+        script: |
+          set -Eeou pipefail
+          .evergreen/scripts/release.sh "${triggered_by_git_tag}" "$(pwd)/artifacts"
+
+tasks:
+  - name: build_macos
+    commands:
+      - func: "fetch source"
+      - func: "install rust"
+      - func: "build"
+        vars:
+          target: "aarch64-apple-darwin"
+      - func: "upload binary"
+        vars:
+          target: "aarch64-apple-darwin"
+          binary_ext: ""
+      - func: "build"
+        vars:
+          target: "x86_64-apple-darwin"
+      - func: "upload binary"
+        vars:
+          target: "x86_64-apple-darwin"
+          binary_ext: ""
+
+  - name: build_linux_x86_64
+    commands:
+      - func: "fetch source"
+      - func: "install rust"
+      - func: "build"
+        vars:
+          target: "x86_64-unknown-linux-gnu"
+      - func: "upload binary"
+        vars:
+          target: "x86_64-unknown-linux-gnu"
+          binary_ext: ""
+
+  - name: build_linux_arm64
+    commands:
+      - func: "fetch source"
+      - func: "install rust"
+      - func: "build"
+        vars:
+          target: "aarch64-unknown-linux-gnu"
+      - func: "upload binary"
+        vars:
+          target: "aarch64-unknown-linux-gnu"
+          binary_ext: ""
+
+  - name: build_windows
+    commands:
+      - func: "fetch source"
+      - func: "install rust"
+      - func: "build"
+        vars:
+          target: "x86_64-pc-windows-msvc"
+      - func: "upload binary"
+        vars:
+          target: "x86_64-pc-windows-msvc"
+          binary_ext: ".exe"
+
+  - name: notarize_macos
+    depends_on:
+      - name: build_macos
+        variant: macos
+    commands:
+      - func: "fetch source"
+      - func: "download binary"
+        vars:
+          target: "aarch64-apple-darwin"
+          binary_ext: ""
+      - func: "download binary"
+        vars:
+          target: "x86_64-apple-darwin"
+          binary_ext: ""
+      - func: "install macos notarization service"
+      - func: "notarize macos binaries"
+      - func: "upload notarized binary"
+        vars:
+          target: "aarch64-apple-darwin"
+      - func: "upload notarized binary"
+        vars:
+          target: "x86_64-apple-darwin"
+
+  - name: package
+    depends_on:
+      - name: notarize_macos
+        variant: notarize-and-release
+      - name: build_linux_x86_64
+        variant: linux-x86_64
+      - name: build_linux_arm64
+        variant: linux-arm64
+      - name: build_windows
+        variant: windows
+    commands:
+      - func: "fetch source"
+      - func: "download notarized binary"
+        vars:
+          target: "aarch64-apple-darwin"
+      - func: "download notarized binary"
+        vars:
+          target: "x86_64-apple-darwin"
+      - func: "download binary"
+        vars:
+          target: "x86_64-unknown-linux-gnu"
+          binary_ext: ""
+      - func: "download binary"
+        vars:
+          target: "aarch64-unknown-linux-gnu"
+          binary_ext: ""
+      - func: "download binary"
+        vars:
+          target: "x86_64-pc-windows-msvc"
+          binary_ext: ".exe"
+      - func: "package one target"
+        vars:
+          target: "aarch64-apple-darwin"
+          binary_ext: ""
+      - func: "package one target"
+        vars:
+          target: "x86_64-apple-darwin"
+          binary_ext: ""
+      - func: "package one target"
+        vars:
+          target: "x86_64-unknown-linux-gnu"
+          binary_ext: ""
+      - func: "package one target"
+        vars:
+          target: "aarch64-unknown-linux-gnu"
+          binary_ext: ""
+      - func: "package one target"
+        vars:
+          target: "x86_64-pc-windows-msvc"
+          binary_ext: ".exe"
+      - command: s3.put
+        params:
+          aws_key: ${aws_key}
+          aws_secret: ${aws_secret}
+          local_file: src/artifacts/atlas-cli-plugin-sh-aarch64-apple-darwin.tar.gz
+          remote_file: ${project}/${version_id}/artifacts/atlas-cli-plugin-sh-aarch64-apple-darwin.tar.gz
+          bucket: ${release_bucket}
+          permissions: private
+          content_type: application/octet-stream
+      - command: s3.put
+        params:
+          aws_key: ${aws_key}
+          aws_secret: ${aws_secret}
+          local_file: src/artifacts/atlas-cli-plugin-sh-x86_64-apple-darwin.tar.gz
+          remote_file: ${project}/${version_id}/artifacts/atlas-cli-plugin-sh-x86_64-apple-darwin.tar.gz
+          bucket: ${release_bucket}
+          permissions: private
+          content_type: application/octet-stream
+      - command: s3.put
+        params:
+          aws_key: ${aws_key}
+          aws_secret: ${aws_secret}
+          local_file: src/artifacts/atlas-cli-plugin-sh-x86_64-unknown-linux-gnu.tar.gz
+          remote_file: ${project}/${version_id}/artifacts/atlas-cli-plugin-sh-x86_64-unknown-linux-gnu.tar.gz
+          bucket: ${release_bucket}
+          permissions: private
+          content_type: application/octet-stream
+      - command: s3.put
+        params:
+          aws_key: ${aws_key}
+          aws_secret: ${aws_secret}
+          local_file: src/artifacts/atlas-cli-plugin-sh-aarch64-unknown-linux-gnu.tar.gz
+          remote_file: ${project}/${version_id}/artifacts/atlas-cli-plugin-sh-aarch64-unknown-linux-gnu.tar.gz
+          bucket: ${release_bucket}
+          permissions: private
+          content_type: application/octet-stream
+      - command: s3.put
+        params:
+          aws_key: ${aws_key}
+          aws_secret: ${aws_secret}
+          local_file: src/artifacts/atlas-cli-plugin-sh-x86_64-pc-windows-msvc.zip
+          remote_file: ${project}/${version_id}/artifacts/atlas-cli-plugin-sh-x86_64-pc-windows-msvc.zip
+          bucket: ${release_bucket}
+          permissions: private
+          content_type: application/octet-stream
+      - command: s3.put
+        params:
+          aws_key: ${aws_key}
+          aws_secret: ${aws_secret}
+          local_file: src/artifacts/checksums.sha256
+          remote_file: ${project}/${version_id}/artifacts/checksums.sha256
+          bucket: ${release_bucket}
+          permissions: private
+          content_type: text/plain
+
+  - name: release
+    depends_on:
+      - name: package
+        variant: notarize-and-release
+    commands:
+      - func: "fetch source"
+      - command: s3.get
+        params:
+          aws_key: ${aws_key}
+          aws_secret: ${aws_secret}
+          remote_file: ${project}/${version_id}/artifacts/atlas-cli-plugin-sh-aarch64-apple-darwin.tar.gz
+          bucket: ${release_bucket}
+          local_file: src/artifacts/atlas-cli-plugin-sh-aarch64-apple-darwin.tar.gz
+      - command: s3.get
+        params:
+          aws_key: ${aws_key}
+          aws_secret: ${aws_secret}
+          remote_file: ${project}/${version_id}/artifacts/atlas-cli-plugin-sh-x86_64-apple-darwin.tar.gz
+          bucket: ${release_bucket}
+          local_file: src/artifacts/atlas-cli-plugin-sh-x86_64-apple-darwin.tar.gz
+      - command: s3.get
+        params:
+          aws_key: ${aws_key}
+          aws_secret: ${aws_secret}
+          remote_file: ${project}/${version_id}/artifacts/atlas-cli-plugin-sh-x86_64-unknown-linux-gnu.tar.gz
+          bucket: ${release_bucket}
+          local_file: src/artifacts/atlas-cli-plugin-sh-x86_64-unknown-linux-gnu.tar.gz
+      - command: s3.get
+        params:
+          aws_key: ${aws_key}
+          aws_secret: ${aws_secret}
+          remote_file: ${project}/${version_id}/artifacts/atlas-cli-plugin-sh-aarch64-unknown-linux-gnu.tar.gz
+          bucket: ${release_bucket}
+          local_file: src/artifacts/atlas-cli-plugin-sh-aarch64-unknown-linux-gnu.tar.gz
+      - command: s3.get
+        params:
+          aws_key: ${aws_key}
+          aws_secret: ${aws_secret}
+          remote_file: ${project}/${version_id}/artifacts/atlas-cli-plugin-sh-x86_64-pc-windows-msvc.zip
+          bucket: ${release_bucket}
+          local_file: src/artifacts/atlas-cli-plugin-sh-x86_64-pc-windows-msvc.zip
+      - command: s3.get
+        params:
+          aws_key: ${aws_key}
+          aws_secret: ${aws_secret}
+          remote_file: ${project}/${version_id}/artifacts/checksums.sha256
+          bucket: ${release_bucket}
+          local_file: src/artifacts/checksums.sha256
+      - func: "create github release"
+
+buildvariants:
+  - name: macos
+    display_name: macOS (build)
+    run_on:
+      - macos-14-arm64
+    tasks:
+      - name: build_macos
+
+  - name: linux-x86_64
+    display_name: Linux x86_64 (build)
+    run_on:
+      - ubuntu2204-small
+    tasks:
+      - name: build_linux_x86_64
+
+  - name: linux-arm64
+    display_name: Linux arm64 (build)
+    run_on:
+      - ubuntu2204-arm64-small
+    tasks:
+      - name: build_linux_arm64
+
+  - name: windows
+    display_name: Windows (build)
+    run_on:
+      - windows-vsCurrent-small
+    tasks:
+      - name: build_windows
+
+  - name: notarize-and-release
+    display_name: Notarize & Release
+    run_on:
+      - ubuntu2204-small
+    tasks:
+      - name: notarize_macos
+      - name: package
+      - name: release
