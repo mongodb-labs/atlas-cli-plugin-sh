@@ -17,8 +17,17 @@ trap 'rm -rf "$work_dir"' EXIT
 
 input_zip="$work_dir/mac-bins.zip"
 output_zip="$work_dir/mac-bins-signed.zip"
+signed_dir="$work_dir/signed"
+mkdir -p "$signed_dir"
 
-zip -j "$input_zip" "${binaries[@]}"
+staged_binaries=()
+for binary in "${binaries[@]}"; do
+  staged_binary="$work_dir/$(basename "$(dirname "$binary")")-$(basename "$binary")"
+  cp "$binary" "$staged_binary"
+  staged_binaries+=("$staged_binary")
+done
+
+zip -j "$input_zip" "${staged_binaries[@]}"
 
 "$macnotary_bin" \
   -f "$input_zip" \
@@ -32,6 +41,8 @@ if [[ ! -f "$output_zip" ]]; then
   exit 1
 fi
 
-for binary in "${binaries[@]}"; do
-  unzip -oj "$output_zip" "$(basename "$binary")" -d "$(dirname "$binary")"
+for index in "${!binaries[@]}"; do
+  staged_binary="${staged_binaries[$index]}"
+  unzip -oj "$output_zip" "$(basename "$staged_binary")" -d "$signed_dir"
+  mv "$signed_dir/$(basename "$staged_binary")" "${binaries[$index]}"
 done
