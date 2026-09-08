@@ -26,6 +26,8 @@ tar -tzf "$archive_linux" | grep -q "manifest.yml$" \
 
 unzip -l "$archive_windows" | grep -q "atlas-cli-plugin-sh.exe$" \
   || { echo "FAIL: windows archive missing .exe binary"; exit 1; }
+unzip -p "$archive_windows" "atlas-cli-plugin-sh-x86_64-pc-windows-msvc/manifest.yml" | grep -q "binary: atlas-cli-plugin-sh.exe" \
+  || { echo "FAIL: windows manifest has wrong binary"; exit 1; }
 
 checksums="$output_dir/checksums.sha256"
 [[ -f "$checksums" ]] || { echo "FAIL: missing checksums file"; exit 1; }

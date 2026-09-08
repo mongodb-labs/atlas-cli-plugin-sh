@@ -15,8 +15,13 @@ functions:
         shell: bash
         script: |
           set -Eeou pipefail
-          if ! command -v cargo >/dev/null 2>&1; then
-            curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable --profile minimal
+          system="$(uname -s)"
+          if [[ "${OS:-}" == "Windows_NT" || "$system" == CYGWIN* || "$system" == MINGW* || "$system" == MSYS* ]]; then
+            export CARGO_HOME="$(cygpath -w "$(pwd)/.cargo")"
+            export RUSTUP_HOME="$(cygpath -w "$(pwd)/.rustup")"
+            curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable-x86_64-pc-windows-msvc --profile minimal --no-modify-path
+          else
+            curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable --profile minimal --no-modify-path
           fi
 
   "build":
@@ -26,25 +31,72 @@ functions:
         shell: bash
         script: |
           set -Eeou pipefail
-          export PATH="$HOME/.cargo/bin:$PATH"
+          system="$(uname -s)"
+          if [[ "${OS:-}" == "Windows_NT" || "$system" == CYGWIN* || "$system" == MINGW* || "$system" == MSYS* ]]; then
+            cargo_home="$(cygpath -u "$(pwd)/.cargo")"
+            export CARGO_HOME="$(cygpath -w "$(pwd)/.cargo")"
+            export RUSTUP_HOME="$(cygpath -w "$(pwd)/.rustup")"
+            export PATH="$cargo_home/bin:$PATH"
+          else
+            export PATH="$HOME/.cargo/bin:$PATH"
+          fi
+          hash -r
           .evergreen/scripts/build.sh "${target}"
 
   "upload binary":
     - command: s3.put
       params:
-        aws_key: ${aws_key}
-        aws_secret: ${aws_secret}
+        role_arn: ${release_bucket_role_arn}
         local_file: src/target/${target}/release/atlas-cli-plugin-sh${binary_ext}
         remote_file: ${project}/${version_id}/binaries/${target}/atlas-cli-plugin-sh${binary_ext}
         bucket: ${release_bucket}
         permissions: private
         content_type: application/octet-stream
 
+  "authenticate to ecr":
+    - command: ec2.assume_role
+      params:
+        role_arn: ${ecr_role_arn|arn:aws:iam::901841024863:role/ecr-role-evergreen-ro}
+    - command: subprocess.exec
+      params:
+        working_dir: src
+        include_expansions_in_env:
+          - AWS_ACCESS_KEY_ID
+          - AWS_SECRET_ACCESS_KEY
+          - AWS_SESSION_TOKEN
+        binary: .evergreen/scripts/ecr-login.sh
+
+  "sign windows binary":
+    - command: shell.exec
+      params:
+        working_dir: src
+        shell: bash
+        env:
+          GRS_USERNAME: ${garasign_username}
+          GRS_PASSWORD: ${garasign_password}
+          AUTHENTICODE_KEY_NAME: ${authenticode_key_name}
+        script: |
+          set -Eeou pipefail
+          .evergreen/scripts/sign-windows.sh "${binary}"
+
+  "sign linux artifacts":
+    - command: shell.exec
+      params:
+        working_dir: src
+        shell: bash
+        env:
+          GRS_USERNAME: ${garasign_username}
+          GRS_PASSWORD: ${garasign_password}
+        script: |
+          set -Eeou pipefail
+          .evergreen/scripts/sign-linux.sh \
+            artifacts/atlas-cli-plugin-sh-x86_64-unknown-linux-gnu.tar.gz \
+            artifacts/atlas-cli-plugin-sh-aarch64-unknown-linux-gnu.tar.gz
+
   "download binary":
     - command: s3.get
       params:
-        aws_key: ${aws_key}
-        aws_secret: ${aws_secret}
+        role_arn: ${release_bucket_role_arn}
         remote_file: ${project}/${version_id}/binaries/${target}/atlas-cli-plugin-sh${binary_ext}
         bucket: ${release_bucket}
         local_file: src/incoming-binaries/${target}/atlas-cli-plugin-sh${binary_ext}
@@ -55,10 +107,10 @@ functions:
         working_dir: src
         shell: bash
         include_expansions_in_env:
-          - notary_service_url
+          - macnotary_client_url
         script: |
           set -Eeou pipefail
-          .evergreen/scripts/install-macnotary.sh "${notary_service_url}" "$(pwd)/.macnotary"
+          .evergreen/scripts/install-macnotary.sh "${macnotary_client_url}" "$(pwd)/.macnotary"
 
   "notarize macos binaries":
     - command: shell.exec
@@ -68,13 +120,14 @@ functions:
         include_expansions_in_env:
           - notary_service_key_id
           - notary_service_secret
+          - notary_service_url
         script: |
           set -Eeou pipefail
           export MACOS_NOTARY_KEY="${notary_service_key_id}"
           export MACOS_NOTARY_SECRET="${notary_service_secret}"
           .evergreen/scripts/notarize-macos.sh \
             "$(pwd)/.macnotary/linux_amd64/macnotary" \
-            "https://dev.macos-notary.build.10gen.cc/api" \
+            "${notary_service_url}" \
             "com.mongodb.atlas-cli-plugin-sh" \
             incoming-binaries/aarch64-apple-darwin/atlas-cli-plugin-sh \
             incoming-binaries/x86_64-apple-darwin/atlas-cli-plugin-sh
@@ -82,8 +135,7 @@ functions:
   "upload notarized binary":
     - command: s3.put
       params:
-        aws_key: ${aws_key}
-        aws_secret: ${aws_secret}
+        role_arn: ${release_bucket_role_arn}
         local_file: src/incoming-binaries/${target}/atlas-cli-plugin-sh
         remote_file: ${project}/${version_id}/binaries-notarized/${target}/atlas-cli-plugin-sh
         bucket: ${release_bucket}
@@ -93,8 +145,7 @@ functions:
   "download notarized binary":
     - command: s3.get
       params:
-        aws_key: ${aws_key}
-        aws_secret: ${aws_secret}
+        role_arn: ${release_bucket_role_arn}
         remote_file: ${project}/${version_id}/binaries-notarized/${target}/atlas-cli-plugin-sh
         bucket: ${release_bucket}
         local_file: src/incoming-binaries/${target}/atlas-cli-plugin-sh
@@ -231,6 +282,7 @@ tasks:
         vars:
           target: "x86_64-pc-windows-msvc"
           binary_ext: ".exe"
+      - func: "authenticate to ecr"
       - func: "package one target"
         vars:
           target: "aarch64-apple-darwin"
@@ -247,14 +299,17 @@ tasks:
         vars:
           target: "aarch64-unknown-linux-gnu"
           binary_ext: ""
+      - func: "sign linux artifacts"
+      - func: "sign windows binary"
+        vars:
+          binary: "incoming-binaries/x86_64-pc-windows-msvc/atlas-cli-plugin-sh.exe"
       - func: "package one target"
         vars:
           target: "x86_64-pc-windows-msvc"
           binary_ext: ".exe"
       - command: s3.put
         params:
-          aws_key: ${aws_key}
-          aws_secret: ${aws_secret}
+          role_arn: ${release_bucket_role_arn}
           local_file: src/artifacts/atlas-cli-plugin-sh-aarch64-apple-darwin.tar.gz
           remote_file: ${project}/${version_id}/artifacts/atlas-cli-plugin-sh-aarch64-apple-darwin.tar.gz
           bucket: ${release_bucket}
@@ -262,8 +317,7 @@ tasks:
           content_type: application/octet-stream
       - command: s3.put
         params:
-          aws_key: ${aws_key}
-          aws_secret: ${aws_secret}
+          role_arn: ${release_bucket_role_arn}
           local_file: src/artifacts/atlas-cli-plugin-sh-x86_64-apple-darwin.tar.gz
           remote_file: ${project}/${version_id}/artifacts/atlas-cli-plugin-sh-x86_64-apple-darwin.tar.gz
           bucket: ${release_bucket}
@@ -271,8 +325,7 @@ tasks:
           content_type: application/octet-stream
       - command: s3.put
         params:
-          aws_key: ${aws_key}
-          aws_secret: ${aws_secret}
+          role_arn: ${release_bucket_role_arn}
           local_file: src/artifacts/atlas-cli-plugin-sh-x86_64-unknown-linux-gnu.tar.gz
           remote_file: ${project}/${version_id}/artifacts/atlas-cli-plugin-sh-x86_64-unknown-linux-gnu.tar.gz
           bucket: ${release_bucket}
@@ -280,8 +333,7 @@ tasks:
           content_type: application/octet-stream
       - command: s3.put
         params:
-          aws_key: ${aws_key}
-          aws_secret: ${aws_secret}
+          role_arn: ${release_bucket_role_arn}
           local_file: src/artifacts/atlas-cli-plugin-sh-aarch64-unknown-linux-gnu.tar.gz
           remote_file: ${project}/${version_id}/artifacts/atlas-cli-plugin-sh-aarch64-unknown-linux-gnu.tar.gz
           bucket: ${release_bucket}
@@ -289,8 +341,7 @@ tasks:
           content_type: application/octet-stream
       - command: s3.put
         params:
-          aws_key: ${aws_key}
-          aws_secret: ${aws_secret}
+          role_arn: ${release_bucket_role_arn}
           local_file: src/artifacts/atlas-cli-plugin-sh-x86_64-pc-windows-msvc.zip
           remote_file: ${project}/${version_id}/artifacts/atlas-cli-plugin-sh-x86_64-pc-windows-msvc.zip
           bucket: ${release_bucket}
@@ -298,13 +349,28 @@ tasks:
           content_type: application/octet-stream
       - command: s3.put
         params:
-          aws_key: ${aws_key}
-          aws_secret: ${aws_secret}
+          role_arn: ${release_bucket_role_arn}
           local_file: src/artifacts/checksums.sha256
           remote_file: ${project}/${version_id}/artifacts/checksums.sha256
           bucket: ${release_bucket}
           permissions: private
           content_type: text/plain
+      - command: s3.put
+        params:
+          role_arn: ${release_bucket_role_arn}
+          local_file: src/artifacts/atlas-cli-plugin-sh-x86_64-unknown-linux-gnu.tar.gz.sig
+          remote_file: ${project}/${version_id}/artifacts/atlas-cli-plugin-sh-x86_64-unknown-linux-gnu.tar.gz.sig
+          bucket: ${release_bucket}
+          permissions: private
+          content_type: application/pgp-signature
+      - command: s3.put
+        params:
+          role_arn: ${release_bucket_role_arn}
+          local_file: src/artifacts/atlas-cli-plugin-sh-aarch64-unknown-linux-gnu.tar.gz.sig
+          remote_file: ${project}/${version_id}/artifacts/atlas-cli-plugin-sh-aarch64-unknown-linux-gnu.tar.gz.sig
+          bucket: ${release_bucket}
+          permissions: private
+          content_type: application/pgp-signature
 
   - name: release
     depends_on:
@@ -314,46 +380,52 @@ tasks:
       - func: "fetch source"
       - command: s3.get
         params:
-          aws_key: ${aws_key}
-          aws_secret: ${aws_secret}
+          role_arn: ${release_bucket_role_arn}
           remote_file: ${project}/${version_id}/artifacts/atlas-cli-plugin-sh-aarch64-apple-darwin.tar.gz
           bucket: ${release_bucket}
           local_file: src/artifacts/atlas-cli-plugin-sh-aarch64-apple-darwin.tar.gz
       - command: s3.get
         params:
-          aws_key: ${aws_key}
-          aws_secret: ${aws_secret}
+          role_arn: ${release_bucket_role_arn}
           remote_file: ${project}/${version_id}/artifacts/atlas-cli-plugin-sh-x86_64-apple-darwin.tar.gz
           bucket: ${release_bucket}
           local_file: src/artifacts/atlas-cli-plugin-sh-x86_64-apple-darwin.tar.gz
       - command: s3.get
         params:
-          aws_key: ${aws_key}
-          aws_secret: ${aws_secret}
+          role_arn: ${release_bucket_role_arn}
           remote_file: ${project}/${version_id}/artifacts/atlas-cli-plugin-sh-x86_64-unknown-linux-gnu.tar.gz
           bucket: ${release_bucket}
           local_file: src/artifacts/atlas-cli-plugin-sh-x86_64-unknown-linux-gnu.tar.gz
       - command: s3.get
         params:
-          aws_key: ${aws_key}
-          aws_secret: ${aws_secret}
+          role_arn: ${release_bucket_role_arn}
           remote_file: ${project}/${version_id}/artifacts/atlas-cli-plugin-sh-aarch64-unknown-linux-gnu.tar.gz
           bucket: ${release_bucket}
           local_file: src/artifacts/atlas-cli-plugin-sh-aarch64-unknown-linux-gnu.tar.gz
       - command: s3.get
         params:
-          aws_key: ${aws_key}
-          aws_secret: ${aws_secret}
+          role_arn: ${release_bucket_role_arn}
           remote_file: ${project}/${version_id}/artifacts/atlas-cli-plugin-sh-x86_64-pc-windows-msvc.zip
           bucket: ${release_bucket}
           local_file: src/artifacts/atlas-cli-plugin-sh-x86_64-pc-windows-msvc.zip
       - command: s3.get
         params:
-          aws_key: ${aws_key}
-          aws_secret: ${aws_secret}
+          role_arn: ${release_bucket_role_arn}
           remote_file: ${project}/${version_id}/artifacts/checksums.sha256
           bucket: ${release_bucket}
           local_file: src/artifacts/checksums.sha256
+      - command: s3.get
+        params:
+          role_arn: ${release_bucket_role_arn}
+          remote_file: ${project}/${version_id}/artifacts/atlas-cli-plugin-sh-x86_64-unknown-linux-gnu.tar.gz.sig
+          bucket: ${release_bucket}
+          local_file: src/artifacts/atlas-cli-plugin-sh-x86_64-unknown-linux-gnu.tar.gz.sig
+      - command: s3.get
+        params:
+          role_arn: ${release_bucket_role_arn}
+          remote_file: ${project}/${version_id}/artifacts/atlas-cli-plugin-sh-aarch64-unknown-linux-gnu.tar.gz.sig
+          bucket: ${release_bucket}
+          local_file: src/artifacts/atlas-cli-plugin-sh-aarch64-unknown-linux-gnu.tar.gz.sig
       - func: "create github release"
 
 buildvariants:

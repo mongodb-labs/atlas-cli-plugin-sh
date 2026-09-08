@@ -7,22 +7,33 @@ output_dir="${3:?usage: package.sh <target-triple> <binary-path> <output-dir>}"
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 name="atlas-cli-plugin-sh"
-stage_dir_name="${name}-${target}"
-
 work_dir="$(mktemp -d)"
 trap 'rm -rf "$work_dir"' EXIT
+
+version="$(awk -F'"' '$1 ~ /^[[:space:]]*version = / { print $2; exit }' "$repo_root/Cargo.toml")"
+repository="$(awk -F'"' '$1 ~ /^[[:space:]]*repository = / { print $2; exit }' "$repo_root/Cargo.toml")"
+github_path="${repository#https://github.com/}"
+github_owner="${github_path%%/*}"
+github_name="${github_path#*/}"
+binary_name="$name"
+if [[ "$target" == *windows* ]]; then
+  binary_name+=".exe"
+fi
+manifest_path="$work_dir/manifest.yml"
+sed \
+  -e "s|\${VERSION}|$version|g" \
+  -e "s|\${GITHUB_REPOSITORY_OWNER}|$github_owner|g" \
+  -e "s|\${GITHUB_REPOSITORY_NAME}|$github_name|g" \
+  -e "s|\${BINARY}|$binary_name|g" \
+  "$repo_root/manifest.template.yml" >"$manifest_path"
+
+stage_dir_name="${name}-${target}"
 
 stage_dir="$work_dir/$stage_dir_name"
 mkdir -p "$stage_dir"
 
-if [[ "$target" == *windows* ]]; then
-  binary_name="${name}.exe"
-else
-  binary_name="$name"
-fi
-
 cp "$binary_path" "$stage_dir/$binary_name"
-cp "$repo_root/manifest.yml" "$stage_dir/manifest.yml"
+cp "$manifest_path" "$stage_dir/manifest.yml"
 cp "$repo_root/README.md" "$stage_dir/README.md"
 cp "$repo_root/LICENSE" "$stage_dir/LICENSE"
 

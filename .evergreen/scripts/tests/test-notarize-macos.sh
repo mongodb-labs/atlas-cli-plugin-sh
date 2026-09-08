@@ -5,8 +5,9 @@ script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 tmp_root="$(mktemp -d)"
 trap 'rm -rf "$tmp_root"' EXIT
 
-bin1="$tmp_root/atlas-cli-plugin-sh-aarch64"
-bin2="$tmp_root/atlas-cli-plugin-sh-x86_64"
+mkdir -p "$tmp_root/arm64" "$tmp_root/x86_64"
+bin1="$tmp_root/arm64/atlas-cli-plugin-sh"
+bin2="$tmp_root/x86_64/atlas-cli-plugin-sh"
 echo "arm64 binary" > "$bin1"
 echo "x86_64 binary" > "$bin2"
 
@@ -29,6 +30,8 @@ EOF
 chmod +x "$fake_ok"
 
 "$script_dir/notarize-macos.sh" "$fake_ok" "https://example.invalid/api" "com.example.test" "$bin1" "$bin2"
+[[ "$(<"$bin1")" == "arm64 binary" ]] || { echo "FAIL: arm64 binary was not restored"; exit 1; }
+[[ "$(<"$bin2")" == "x86_64 binary" ]] || { echo "FAIL: x86_64 binary was not restored"; exit 1; }
 echo "PASS: notarize-macos.sh succeeds when macnotary produces output"
 
 fake_fail="$tmp_root/macnotary-fail"
