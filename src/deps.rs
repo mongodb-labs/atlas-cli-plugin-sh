@@ -227,27 +227,27 @@ pub(crate) mod fakes {
     }
 
     impl AtlasApi for FakeAtlasApi {
-        async fn get_cluster_srv(
+        fn get_cluster_srv(
             &self,
             _project_id: &ProjectId,
             _cluster: &ClusterName,
-        ) -> Result<String> {
-            Ok(self.srv.clone())
+        ) -> impl Future<Output = Result<String>> {
+            std::future::ready(Ok(self.srv.clone()))
         }
 
-        async fn create_temp_db_user(
+        fn create_temp_db_user(
             &self,
             _project_id: &ProjectId,
             username: &Username,
             password: &Password,
             delete_after_date: &str,
-        ) -> Result<()> {
+        ) -> impl Future<Output = Result<()>> {
             self.created_users.borrow_mut().push((
                 username.clone(),
                 password.clone(),
                 delete_after_date.to_owned(),
             ));
-            Ok(())
+            std::future::ready(Ok(()))
         }
     }
 }
