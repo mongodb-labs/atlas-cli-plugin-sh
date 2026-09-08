@@ -26,4 +26,10 @@ if grep -q -- "--prerelease" "$record_file"; then
   echo "FAIL: did not expect --prerelease for stable tag"; exit 1
 fi
 
+# No tag arg: must derive the latest v* tag from git (the release task runs on a
+# git-tag-triggered version where triggered_by_git_tag may not be available).
+latest="$(git tag --list 'v*' --sort=-version:refname | head -1)"
+PATH="$fake_gh_dir:$PATH" "$script_dir/release.sh" "" "$artifacts_dir"
+grep -q -- "$latest" "$record_file" || { echo "FAIL: expected derived tag $latest"; exit 1; }
+
 echo "PASS: release.sh"

@@ -373,6 +373,7 @@ tasks:
           content_type: application/pgp-signature
 
   - name: release
+    git_tag_only: true
     depends_on:
       - name: package
         variant: notarize-and-release
