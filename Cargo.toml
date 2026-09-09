@@ -1,6 +1,6 @@
 [package]
 name = "atlas-cli-plugin-sh"
-version = "1.0.0-rc7"
+version = "1.0.0-rc8"
 edition = "2021"
 repository = "https://github.com/jeroenvervaeke/atlas-cli-plugin-sh"
 
