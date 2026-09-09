@@ -49,5 +49,6 @@ chmod +x "$fake_curl_dir/curl"
 PATH="$fake_curl_dir:/usr/bin:/bin:/usr/sbin:/sbin" CURL_RECORD="$curl_record" GH_TOKEN="tok" "$script_dir/release.sh" "v1.0.0-rc6" "$artifacts_dir"
 grep -q "api.github.com/repos/" "$curl_record" || { echo "FAIL: curl create release not called"; exit 1; }
 grep -q "uploads.github.com/repos/" "$curl_record" || { echo "FAIL: curl asset upload not called"; exit 1; }
+grep -q -- "application/x-gtar" "$curl_record" || { echo "FAIL: expected tar.gz asset content-type application/x-gtar"; exit 1; }
 
 echo "PASS: release.sh"

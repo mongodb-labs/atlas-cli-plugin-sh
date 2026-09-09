@@ -37,10 +37,15 @@ echo "created release ${tag} (id=${release_id})"
 for artifact in "$artifacts_dir"/*; do
   [[ -f "$artifact" ]] || continue
   name="$(basename "$artifact")"
-  echo "uploading ${name}"
+  case "$name" in
+    *.tar.gz) content_type="application/x-gtar" ;;
+    *.zip) content_type="application/zip" ;;
+    *) content_type="application/octet-stream" ;;
+  esac
+  echo "uploading ${name} (${content_type})"
   curl -fsSL -X POST \
     -H "Authorization: Bearer ${GH_TOKEN}" \
-    -H "Content-Type: application/octet-stream" \
+    -H "Content-Type: ${content_type}" \
     --data-binary "@${artifact}" \
     "https://uploads.github.com/repos/${owner_repo}/releases/${release_id}/assets?name=${name}" \
     >/dev/null
