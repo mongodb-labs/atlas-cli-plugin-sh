@@ -171,16 +171,6 @@ functions:
           GH_TOKEN: ${github_token}
         script: |
           set -Eeou pipefail
-          if ! command -v gh >/dev/null 2>&1; then
-            echo "Installing gh CLI"
-            gh_version="$(curl -fsSL https://api.github.com/repos/cli/cli/releases/latest | python3 -c 'import sys,json;print(json.load(sys.stdin)["tag_name"].lstrip("v"))')"
-            curl -fsSL "https://github.com/cli/cli/releases/download/v${gh_version}/gh_${gh_version}_linux_amd64.tar.gz" -o /tmp/gh-cli.tgz
-            tar -xzf /tmp/gh-cli.tgz -C /tmp
-            mkdir -p "${HOME}/.local/bin"
-            cp "/tmp/gh_${gh_version}_linux_amd64/bin/gh" "${HOME}/.local/bin/gh"
-            export PATH="${HOME}/.local/bin:${PATH}"
-          fi
-          gh --version
           .evergreen/scripts/release.sh "${triggered_by_git_tag:-}" "$(pwd)/artifacts"
 
 tasks:

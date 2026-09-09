@@ -32,4 +32,22 @@ latest="$(git tag --list 'v*' --sort=-version:refname | head -1)"
 PATH="$fake_gh_dir:$PATH" "$script_dir/release.sh" "" "$artifacts_dir"
 grep -q -- "$latest" "$record_file" || { echo "FAIL: expected derived tag $latest"; exit 1; }
 
+# No gh on PATH -> publish must fall through to the GitHub API via curl.
+fake_curl_dir="$tmp_root/curlbin"
+mkdir -p "$fake_curl_dir"
+curl_record="$tmp_root/curl-args.txt"
+cat > "$fake_curl_dir/curl" <<'EOF'
+#!/usr/bin/env bash
+echo "$*" >>"$CURL_RECORD"
+if [[ "$*" == *api.github.com* && "$*" == *POST* ]]; then
+  echo '{"id": 424242}'
+fi
+EOF
+chmod +x "$fake_curl_dir/curl"
+
+# controlled PATH without a real/`fake_gh` gh so the API path is exercised
+PATH="$fake_curl_dir:/usr/bin:/bin:/usr/sbin:/sbin" CURL_RECORD="$curl_record" GH_TOKEN="tok" "$script_dir/release.sh" "v1.0.0-rc6" "$artifacts_dir"
+grep -q "api.github.com/repos/" "$curl_record" || { echo "FAIL: curl create release not called"; exit 1; }
+grep -q "uploads.github.com/repos/" "$curl_record" || { echo "FAIL: curl asset upload not called"; exit 1; }
+
 echo "PASS: release.sh"
