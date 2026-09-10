@@ -1,6 +1,6 @@
-use anyhow::{Context, Result};
 #[cfg(not(target_os = "macos"))]
 use anyhow::anyhow;
+use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
@@ -114,8 +114,9 @@ fn parse_cached_json(json: &str) -> Result<CachedCredentials, serde_json::Error>
 /// All keyring failures collapse into `anyhow::Error`. The only consumer is
 /// `main`, which degrades gracefully on any error by re-provisioning a user.
 pub(crate) fn load(account: &KeyringAccount) -> Result<Option<CachedCredentials>> {
-    match get_password(KEYRING_SERVICE, account.as_str())? {
-        Some(json) => match parse_cached_json(&json) {
+    get_password(KEYRING_SERVICE, account.as_str())?.map_or_else(
+        || Ok(None),
+        |json| match parse_cached_json(&json) {
             Ok(creds) => Ok(Some(creds)),
             Err(e) => {
                 tracing::warn!(%e, "corrupted cached credentials, treating as cache miss");
@@ -126,8 +127,7 @@ pub(crate) fn load(account: &KeyringAccount) -> Result<Option<CachedCredentials>
                 Ok(None)
             }
         },
-        None => Ok(None),
-    }
+    )
 }
 
 /// Store credentials in the OS keychain.

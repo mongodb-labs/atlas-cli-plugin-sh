@@ -36,7 +36,10 @@ pub(crate) fn set(service: &str, account: &str, value: &str) -> Result<()> {
         .stderr(Stdio::piped())
         .spawn()
         .map_err(|e| io_error(&e))?;
-    let mut stdin = child.stdin.take().context("security did not expose stdin")?;
+    let mut stdin = child
+        .stdin
+        .take()
+        .context("security did not expose stdin")?;
     // Write first, then reap. If `security` exits early the write hits EPIPE;
     // we still reap so its stderr (the only explanation) is kept and we don't
     // leave a zombie.
@@ -81,7 +84,10 @@ fn build_add_command(service: &str, account: &str, value: &str) -> Result<String
     // `security -i` splits input into commands on line breaks *before* quote
     // parsing, so a `'` cannot neutralise an embedded newline: it would
     // terminate this command and execute the remainder as a new one.
-    if [service, account, value].iter().any(|s| contains_line_break(s)) {
+    if [service, account, value]
+        .iter()
+        .any(|s| contains_line_break(s))
+    {
         return Err(anyhow!(
             "service, account and secret must not contain line breaks"
         ));
