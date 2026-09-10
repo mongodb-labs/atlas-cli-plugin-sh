@@ -1,12 +1,68 @@
 use anyhow::{Context, Result};
+#[cfg(not(target_os = "macos"))]
+use anyhow::anyhow;
 use chrono::{DateTime, Utc};
-use keyring::Entry;
 use serde::{Deserialize, Serialize};
 
 use crate::domain::{ConnectionString, KeyringAccount, Password, Username};
 
+// macOS reads/writes items through `/usr/bin/security` (Apple-signed, stable
+// identity) instead of the keyring crate, so a rebuilt or re-signed binary
+// doesn't re-trigger the keychain prompt. Linux/Windows keep the `keyring`
+// crate's native backends.
+#[cfg(target_os = "macos")]
+mod security_cli;
+
+#[cfg(not(target_os = "macos"))]
+use keyring::Entry;
+
 const KEYRING_SERVICE: &str = "atlas-sh";
 pub(crate) const TTL_HOURS: i64 = 8;
+
+// --- Per-OS secret store backend ------------------------------------------
+
+#[cfg(target_os = "macos")]
+fn get_password(service: &str, account: &str) -> Result<Option<String>> {
+    security_cli::get(service, account)
+}
+
+#[cfg(not(target_os = "macos"))]
+fn get_password(service: &str, account: &str) -> Result<Option<String>> {
+    let entry = Entry::new(service, account).context("failed to open keyring entry")?;
+    match entry.get_password() {
+        Ok(value) => Ok(Some(value)),
+        Err(keyring::Error::NoEntry) => Ok(None),
+        Err(e) => Err(anyhow!("keyring error: {e}")),
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn set_password(service: &str, account: &str, value: &str) -> Result<()> {
+    security_cli::set(service, account, value)
+}
+
+#[cfg(not(target_os = "macos"))]
+fn set_password(service: &str, account: &str, value: &str) -> Result<()> {
+    Entry::new(service, account)
+        .context("failed to open keyring entry")?
+        .set_password(value)
+        .map_err(|e| anyhow!("failed to write to keyring: {e}"))
+}
+
+#[cfg(target_os = "macos")]
+fn delete_password(service: &str, account: &str) -> Result<bool> {
+    security_cli::delete(service, account)
+}
+
+#[cfg(not(target_os = "macos"))]
+fn delete_password(service: &str, account: &str) -> Result<bool> {
+    let entry = Entry::new(service, account).context("failed to open keyring entry")?;
+    match entry.delete_credential() {
+        Ok(()) => Ok(true),
+        Err(keyring::Error::NoEntry) => Ok(false),
+        Err(e) => Err(anyhow!("failed to delete keyring entry: {e}")),
+    }
+}
 
 #[derive(Debug, Serialize, Deserialize)]
 pub(crate) struct CachedCredentials {
@@ -58,11 +114,8 @@ fn parse_cached_json(json: &str) -> Result<CachedCredentials, serde_json::Error>
 /// All keyring failures collapse into `anyhow::Error`. The only consumer is
 /// `main`, which degrades gracefully on any error by re-provisioning a user.
 pub(crate) fn load(account: &KeyringAccount) -> Result<Option<CachedCredentials>> {
-    let entry =
-        Entry::new(KEYRING_SERVICE, account.as_str()).context("failed to open keyring entry")?;
-
-    match entry.get_password() {
-        Ok(json) => match parse_cached_json(&json) {
+    match get_password(KEYRING_SERVICE, account.as_str())? {
+        Some(json) => match parse_cached_json(&json) {
             Ok(creds) => Ok(Some(creds)),
             Err(e) => {
                 tracing::warn!(%e, "corrupted cached credentials, treating as cache miss");
@@ -73,20 +126,14 @@ pub(crate) fn load(account: &KeyringAccount) -> Result<Option<CachedCredentials>
                 Ok(None)
             }
         },
-        Err(keyring::Error::NoEntry) => Ok(None),
-        Err(e) => Err(anyhow::anyhow!("keyring error: {e}")),
+        None => Ok(None),
     }
 }
 
 /// Store credentials in the OS keychain.
 pub(crate) fn store(account: &KeyringAccount, creds: &CachedCredentials) -> Result<()> {
-    let entry =
-        Entry::new(KEYRING_SERVICE, account.as_str()).context("failed to open keyring entry")?;
     let json = serde_json::to_string(creds).context("failed to serialize credentials")?;
-    entry
-        .set_password(&json)
-        .context("failed to write to keyring")?;
-    Ok(())
+    set_password(KEYRING_SERVICE, account.as_str(), &json)
 }
 
 /// Delete cached credentials from the OS keychain.
@@ -95,13 +142,7 @@ pub(crate) fn store(account: &KeyringAccount, creds: &CachedCredentials) -> Resu
 /// was cached for `account` (idempotent — calling logout twice is not an
 /// error). Returns `Err` for genuine keyring failures.
 pub(crate) fn invalidate(account: &KeyringAccount) -> Result<bool> {
-    let entry =
-        Entry::new(KEYRING_SERVICE, account.as_str()).context("failed to open keyring entry")?;
-    match entry.delete_credential() {
-        Ok(()) => Ok(true),
-        Err(keyring::Error::NoEntry) => Ok(false),
-        Err(e) => Err(anyhow::anyhow!("failed to delete keyring entry: {e}")),
-    }
+    delete_password(KEYRING_SERVICE, account.as_str())
 }
 
 #[cfg(test)]
