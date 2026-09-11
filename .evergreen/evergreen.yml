@@ -169,9 +169,13 @@ functions:
         shell: bash
         env:
           GH_TOKEN: ${github_token}
+          # Resolve the triggering tag at the YAML layer, where ${...} is valid
+          # Evergreen expansion syntax. In the script body use ${RELEASE_TAG} —
+          # a ${...} there is swallowed by Evergreen (see git-tag-released rc9/v1.0.0).
+          RELEASE_TAG: ${triggered_by_git_tag}
         script: |
           set -Eeou pipefail
-          .evergreen/scripts/release.sh "${triggered_by_git_tag:-}" "$(pwd)/artifacts"
+          .evergreen/scripts/release.sh "${RELEASE_TAG:-}" "$(pwd)/artifacts"
 
 tasks:
   - name: build_macos
