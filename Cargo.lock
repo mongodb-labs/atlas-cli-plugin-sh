@@ -128,7 +128,7 @@ dependencies = [
 
 [[package]]
 name = "atlas-cli-plugin-sh"
-version = "1.0.0-rc9"
+version = "1.0.0-rc10"
 dependencies = [
  "anyhow",
  "bytes",
