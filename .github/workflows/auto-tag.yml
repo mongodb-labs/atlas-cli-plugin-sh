@@ -14,7 +14,7 @@ jobs:
     steps:
       - name: set Apix Bot token
         id: app-token
-        uses: mongodb/apix-action/token@f7d2400a387dea2661651b14bbaf8c8f46c8bf66
+        uses: mongodb/apix-action/token@f38b50029361c9af7846889f34a02512e3fff34d
         with:
           app-id: ${{ secrets.APIXBOT_APP_ID }}
           private-key: ${{ secrets.APIXBOT_APP_PEM }}
