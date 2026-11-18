@@ -1,0 +1,29 @@
+name: Setup Rust
+description: Install the Rust toolchain pinned in rust-toolchain.toml.
+
+inputs:
+  components:
+    description: Comma-separated rustup components to install, e.g. "clippy, rustfmt"
+    required: false
+    default: ""
+
+runs:
+  using: composite
+  steps:
+    # rustup auto-install from rust-toolchain.toml is deprecated, so read the
+    # channel here and install it explicitly. This keeps rust-toolchain.toml the
+    # single source of truth, which is what Dependabot bumps.
+    - id: channel
+      shell: bash
+      run: |
+        channel=$(sed -n 's/^channel *= *"\([^"]*\)"/\1/p' rust-toolchain.toml)
+        if [ -z "$channel" ]; then
+          echo "No 'channel' found in rust-toolchain.toml" >&2
+          exit 1
+        fi
+        echo "channel=$channel" >> "$GITHUB_OUTPUT"
+
+    - uses: dtolnay/rust-toolchain@master
+      with:
+        toolchain: ${{ steps.channel.outputs.channel }}
+        components: ${{ inputs.components }}
