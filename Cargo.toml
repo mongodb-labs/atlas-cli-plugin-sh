@@ -15,7 +15,6 @@ http = "1"
 chrono = { version = "0.4", features = ["serde"] }
 console = "0.16"
 clap = { version = "4.6.1", features = ["derive"] }
-keyring = { version = "3", default-features = false, features = ["linux-native", "apple-native", "windows-native"] }
 mongodb-atlas-cli = { version = "0.3.0", features = ["derive"] }
 rand = "0.10"
 redacted = { version = "0.2", features = ["serde_support"] }
@@ -26,6 +25,11 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 uuid = { version = "1", features = ["v4"] }
 which = "8"
+
+# macOS reads credentials from the Keychain directly (see `credentials.rs`), so
+# the `keyring` crate is only compiled on the other platforms.
+[target.'cfg(not(target_os = "macos"))'.dependencies]
+keyring = { version = "3", default-features = false, features = ["linux-native", "windows-native"] }
 
 [lints.rust]
 unsafe_code = "forbid"
