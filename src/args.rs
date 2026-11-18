@@ -145,7 +145,7 @@ mod tests {
         assert_eq!(args.connection.cluster, "my-cluster");
         assert_eq!(args.connection.profile, "default");
         assert!(args.connection.project_id.is_none());
-        assert!(args.mongosh_args.is_empty());
+        assert_eq!(args.mongosh_args, Vec::<String>::new());
     }
 
     #[test]
