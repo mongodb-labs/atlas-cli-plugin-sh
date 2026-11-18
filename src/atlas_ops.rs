@@ -1,3 +1,10 @@
+// `typed_builder`, used by `mongodb_atlas_cli`'s `#[operation]` macro, emits
+// uninhabited marker enums (`..._Error_Repeated_field_*`) for its type-state
+// builder. It allows the sibling `clippy::exhaustive_enums` lint on them but
+// predates `clippy::empty_enums`, so the lint fires on generated code we cannot
+// annotate. Re-evaluate when typed-builder allows `empty_enums` too.
+#![allow(clippy::empty_enums)]
+
 use anyhow::Result;
 use http::StatusCode;
 use mongodb_atlas_cli::atlas::client::AtlasClient;
@@ -240,8 +247,8 @@ mod tests {
     #[test]
     fn temp_user_roles_constant_is_well_formed() {
         for (role, db) in TEMP_USER_ROLES {
-            assert!(!role.is_empty());
-            assert!(!db.is_empty());
+            assert_ne!(*role, "");
+            assert_ne!(*db, "");
         }
     }
 }
